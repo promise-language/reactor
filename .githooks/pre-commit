@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Git pre-commit trampoline — execs the compiled hook, or refuses the commit.
+# Wired up by 'git config core.hooksPath .githooks', which ./make runs for you.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "$root/bin/precommit" ]; then
+    exec "$root/bin/precommit"
+fi
+# Fail closed: the commit gate is mandatory. If bin/precommit is not built, a
+# commit could slip past every check — so block it and demand a bootstrap. The
+# recovery (./make) runs via 'go run' and needs nothing pre-built, so this is a
+# speed bump, never a trap.
+echo "pre-commit: bin/precommit not built — run ./make first, then commit" >&2
+exit 1

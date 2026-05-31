@@ -1,0 +1,3 @@
+
+# forge dev tooling — bin/ holds locally-built tools, never committed
+bin/
