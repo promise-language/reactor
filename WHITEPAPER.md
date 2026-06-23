@@ -92,7 +92,7 @@ and the reason the worked example in §5 is self-referential.)
 
 ## 3. An operating system for autonomous development
 
-ASD has six subsystems. Each maps to a concrete mechanism in Reactor; together
+ASD has seven subsystems. Each maps to a concrete mechanism in Reactor; together
 they are the operating system around the model.
 
 ### Define — durable intent
@@ -144,6 +144,26 @@ by capability (a gate that needs `linux/arm64`, a cross-platform check that need
 three OSes a single human cannot run). The farm is the parallelism
 substrate, and it is where the open question of §6 lives: *how far does
 autonomous construction throughput scale before the serial-dependency floor?*
+
+### Endure — survive the long run
+
+Unattended for days, the loop *will* hit failure — so resilience is its own
+subsystem, not an afterthought. The hazards fall into three classes: **external
+outages** (AI quota exhausted, the model provider or GitHub down, the network
+gone), **infrastructure loss** (a host that reboots on a power cut or auto-update,
+an arena gone unreachable, a disk that fills), and **runaway execution** (a gate
+that leaks memory or overflows the stack, a fork storm, a run that stalls forever,
+a prompt that loops on the same move). A system meant to run for weeks has to
+absorb all of them with no one watching.
+
+It does so on the **stable identity** spine: run state, leases, and artifacts are
+persisted against durable ids through atomic, retried writes, so an interrupted run
+is *resumed, not restarted* — completed steps, and the tokens they burned, are
+never redone. A dead runner's lease is reclaimed; **stop conditions** turn quota
+and cost exhaustion into a graceful pause rather than a crash; timeouts bound
+stalls and reconciliation heals drift; and because arenas are disposable, a fouled
+one is rebuilt from clean. Hardening against the full zoo of failure modes is
+ongoing — but progress, once made, is meant to stick.
 
 ### Engage — the human, by design
 
