@@ -19,8 +19,9 @@ complex system without a human in the loop cleaning up after every step. This
 paper argues the ceiling is real but misattributed. It is not a ceiling on the
 *model*; it is a ceiling on the *system around the model*. Give an agent durable
 intent, a mechanical definition of "correct," an automated resolution loop, an
-orchestrator that holds state across a fleet, and a human who supervises *by
-exception* rather than in the critical path — and the work that survives is large,
+orchestrator that holds state across a fleet, and a human who is engaged *by
+design*, autonomous by default and escalated to deliberately, kept mostly off the
+critical path rather than strapped into it — and the work that survives is large,
 complex, and maintainable.
 
 We call that discipline **Autonomous Software Development (ASD)**, and we make a
@@ -47,7 +48,7 @@ loop.**
 - **"Vibe coding"** removes the human but also removes the bar: generate
   something that runs once, ship it, hope. It produces exactly the slop the
   critics describe.
-- **Autonomous development** removes the human *from the critical path* while
+- **Autonomous development** removes the human *from the moment-to-moment loop* while
   *raising* the bar: the agent defines, implements, tests, and gates the work; the
   human sets intent up front and intervenes only when the system asks. The human
   is a supervisor, not an operator.
@@ -118,8 +119,8 @@ unattended work *trustworthy*: the floor cannot silently drop.
 ### Resolve — the autonomous loop
 
 The unit of autonomy is the **flow** — a self-describing binary that claims one
-eligible item, resolves it, and produces a result (for a contributor, a PR; for
-the admin line, a merged change behind gates). `bin/flow resolve` does it once;
+eligible item, resolves it, and produces a result — a PR, or, on the production
+line, a merged change behind gates. `bin/flow resolve` does it once;
 `bin/flow auto` runs it in a loop until a stop condition — quota, cost cap, or no
 eligible items remain. The loop, not the single shot, is the point: it is how a
 backlog drains without a human pressing the button each time.
@@ -127,7 +128,8 @@ backlog drains without a human pressing the button each time.
 ### Orchestrate — state across a fleet
 
 Resolution at scale needs a backlog, leases so two runners do not collide, a
-scheduler that dispatches work in waves, and run history that persists. This is
+scheduler that resolves items in a conflict-avoiding order, and run history that
+persists. This is
 Reactor proper. **Stable identity** is the spine — every item, gate, and run has a
 durable id (GitHub issue/PR numbers, with a private overlay keyed to them), so the
 system has memory the agents lack. Orchestration is the kernel: it schedules the
@@ -139,49 +141,61 @@ coherent across many concurrent runs.
 Autonomy is only as fast as the substrate it runs on. Reactor manages a farm of
 **arenas** — permanent hosts and ephemeral cloud arenas — and routes work to them
 by capability (a gate that needs `linux/arm64`, a cross-platform check that needs
-three OSes a single contributor cannot run). The farm is the parallelism
-substrate, and it is where the open question of §6 lives: *how much does
-autonomous construction actually parallelize?*
+three OSes a single human cannot run). The farm is the parallelism
+substrate, and it is where the open question of §6 lives: *how far does
+autonomous construction throughput scale before the serial-dependency floor?*
 
-### Engage — the human, by exception
+### Engage — the human, by design
 
-This is the defining inversion. In ASD the human is **out of the critical loop**
-and pulled back in *only when the system needs a decision* — an ambiguous design
-call, a gate that needs human judgment, a PR to review. Engagement is
-**asynchronous and capacity-bounded**: the human responds when they have time, and
-the loop does not stall waiting on them for work it can do itself.
+This is the defining inversion, and the governing principle is **autonomy by
+default with deliberate escalation** — *not* "by exception." The human is **out of
+the critical loop**; the system decides on its own and routes a call to the human
+only when it judges that the call *should rise* to intervention — an ambiguous
+design decision, a gate that needs judgment, a PR to review. That makes the
+interface **intentional, by design**. ("By exception" fairly names only the narrow
+subset the system genuinely *cannot* resolve — a design that holds a contradiction,
+a step that proves infeasible, a change to intent surfaced mid-build — never the
+overall framing.) Most engagement is **asynchronous and capacity-bounded**, kept
+*off the critical path when it can be* — the loop runs while a decision is pending.
+Some is **optional with fallback**: if no guidance arrives, the system decides for
+itself rather than let the item stall and drift out of sync. But some decisions are
+broad enough that *no work can proceed* until the human makes them — there,
+engagement **blocks the whole line** by necessity.
 
 Today that surface is an **inbox** — a queue of notifications the supervisor works
 through. The direction is to evolve it into a **feed**: a social-media-style stream
 the human engages with on their own schedule, deciding what to attend to, while the
-development loop keeps running underneath. The goal is a relationship where human
-attention is the scarcest resource and the system is engineered to spend as little
-of it as possible — never to block on it.
+development loop keeps running underneath. Human attention is the *scarcest
+resource*, and the system is engineered to spend as little of it as possible —
+minimizing engagement and routing around it where it can, never manufacturing a
+wait it could avoid, and blocking only on the broad decisions no work can proceed
+past.
 
 > **Design tenets.** Push domain logic to the project; keep the orchestrator thin.
 > Quality is mechanical, not social. Humans own intent; agents own implementation.
 > One identity authority (GitHub) so nothing leaks or drifts. Engage the human by
-> exception, never in the critical path.
+> design — autonomous by default, escalated deliberately, blocking only when a
+> decision is too broad to route around.
 
 ---
 
 ## 4. The four engagement modes
 
-The "engage by exception" principle is not one-size-fits-all; Reactor supports a
+Deliberate engagement is not one-size-fits-all; Reactor supports a
 gradient of human involvement (detailed in [`docs/design.md`](docs/design.md)):
 
-1. **Admin production line** — a maintainer drives a large backlog across the
-   arena farm; the cloud server resolves items in waves with continuous gates.
+1. **Production line** — a human drives a large backlog across the arena farm; the
+   cloud server resolves items in a conflict-avoiding order with continuous gates.
    Lowest human-per-item engagement.
-2. **Manual contributor** — clone the project, `bin/flow resolve` one issue, open
+2. **Manual resolution** — clone the project, `bin/flow resolve` one issue, open
    a PR. No server; gates run locally. Highest engagement.
-3. **Power contributor** — `bin/flow auto`, the unattended loop, self-capped by
-   the contributor's own quota.
-4. **Admin PR intake** — review and security flows plus cross-platform gates on
+3. **Unattended loop** — `bin/flow auto`, the loop that runs until a stop
+   condition, self-capped by the human's own quota.
+4. **PR intake** — review and security flows plus cross-platform gates on
    ephemeral arenas decide merge or return-to-sender.
 
-The same engine spans solo-unattended to multi-contributor-governed; what changes
-is how often, and on what, the human is asked to engage.
+The same engine spans solo-unattended to multi-human-governed; what changes is how
+often, and on what, the human is asked to engage.
 
 ---
 
@@ -230,13 +244,7 @@ Credibility depends on not overclaiming. The state of the evidence, honestly:
   friction. The signal to watch is **convergence** — each hard target surfacing a
   bounded, shrinking set of issues rather than an endless stream. *This is not yet
   proven, and we do not claim it is.*
-- **Open — does it parallelize?** The build so far was effectively
-  single-threaded: one subscription, one agent, rate-limited. Whether autonomous
-  construction scales near-linearly with more agents, or hits a serial floor
-  (you cannot build on the typechecker before it works; a fix can gate the next
-  task), is unknown. The honest position is a large parallelizable fraction with
-  an unknown serial ceiling — and the arena farm (§3) is the instrument built to
-  measure it.
+- **Open — how far does throughput scale?** Mechanical parallelism is *proven*: up to 8 items have run concurrently across different arenas, sometimes on different hosts — there is no "one item at a time" rule anywhere. Usual concurrency is ~1 for a purely economic reason: a single resolution already outspends the $200/month subscription, so running more only outpaces quota and forces a wait. Even then concurrency is real — items **park** (awaiting a human answer, or a decision to grant more resources) while another proceeds, so multiple builds are genuinely in-flight. What is *open* is whether construction **throughput** scales near-linearly given more budget/agents/substrate, or hits a **serial-dependency floor** — you cannot build on the typechecker before it works; a fix can gate the next task. That is unknown, and the arena farm (§3) is the instrument built to measure it.
 - **Future — external validation.** Independent review and third-party benchmarks
   are the eventual proof that quality is not self-certified. That requires more
   platform stability and coverage first; it is not yet possible, and we flag it as
@@ -264,8 +272,9 @@ Credibility depends on not overclaiming. The state of the evidence, honestly:
 
 Autonomous Software Development is a falsifiable bet: that large, complex,
 maintainable software can be built and kept alive by agents under human design
-direction, with the human supervising by exception — and that the thing standing
-between today and that future is *engineering the system around the model*, not
+direction, with the human autonomous by default and engaged only by deliberate
+escalation — and that the thing standing between today and that future is
+*engineering the system around the model*, not
 waiting for a better model. The existence proof is on the table. The quality proof
 is being run in the open. The scaling question is honestly unanswered.
 

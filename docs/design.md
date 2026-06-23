@@ -19,7 +19,7 @@ A guiding principle: **push domain logic to the project, keep Reactor thin.**
 ## The four scenarios
 
 ### 1 — Admin production line  *(must-support; ≈ tracker today)*
-A maintainer drives a large backlog across a **farm of hosts/arenas** (permanent + ephemeral cloud arenas) — a production line resolving items in waves with continuous quality via periodic gates. **The Reactor server runs in the cloud, not locally** (running it locally is a recipe for trouble); it *manages* local + ephemeral cloud arenas but the server itself is cloud-hosted, with **admin accounts / access control**. Few admins (1 now, maybe a couple soon).
+A maintainer drives a large backlog across a **farm of hosts/arenas** (permanent + ephemeral cloud arenas) — a production line resolving items in a conflict-avoiding order with continuous quality via periodic gates. **The Reactor server runs in the cloud, not locally** (running it locally is a recipe for trouble); it *manages* local + ephemeral cloud arenas but the server itself is cloud-hosted, with **admin accounts / access control**. Few admins (1 now, maybe a couple soon).
 
 ### 2 — Manual contributor  *(donate AI via CLI; no server)*
 A contributor clones the **promise project**, runs `./make` (builds `bin/flow` — flows are project tools, **no external deps**), then runs `bin/flow resolve`: claim one eligible issue, resolve it, open a **PR** for an admin to review/merge. **No Reactor server, no concurrency orchestration.** **All validation gates run locally in the contributor's worktree.** May run a couple of flows concurrently by hand.
