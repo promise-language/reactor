@@ -222,25 +222,45 @@ wait it could avoid.
 
 ---
 
-## 4. The four engagement modes
+## 4. Trust roles
 
-Deliberate engagement is not one-size-fits-all; Reactor supports a set of
-engagement modes at different levels of human involvement (detailed in
-[`docs/design.md`](docs/design.md)):
+The spec of §1 bounds *whether the work is right* (intent + quality, owned by the
+human through *Define* and *Guide*). A second, orthogonal bound governs *who may
+act* — a **bound on authority**: who may admit an item into resolution, and who
+may land its result. A correct result from an untrusted hand still must not reach
+origin on that hand's say-so.
 
-1. **Production line** — a human drives a large backlog across the arena farm; the
-   cloud server resolves items in a conflict-avoiding order with continuous gates.
-   Lowest human-per-item engagement.
-2. **Manual resolution** — clone the project, `bin/flow resolve` one issue, open
-   a PR. No server; gates run locally. Highest human-per-item engagement.
-3. **Unattended loop** — `bin/flow auto`, the loop that runs until a stop
-   condition, self-capped by the human's own quota.
-4. **PR intake** — review and security flows plus cross-platform gates on
-   ephemeral arenas decide merge or return-to-sender.
+Reactor draws the authority bound with **trust roles**. Resolution is not one
+atomic act by one actor; it decomposes into steps assigned to roles at
+**graduated trust**. Untrusted work — a contributor's, or any untrusted agent
+run — is *bracketed* by trusted-agent gates it cannot cross on its own:
 
-The same engine spans the fully unattended solo loop to a multi-human-governed
-production line; what changes is how often, and on what, the human is asked to
-engage.
+- **Intake** *(trusted, front gate — a generalization beyond today's
+  architecture)* — a trusted session would validate a filed item and mark it
+  **approved for resolution**, or bounce it, or escalate. *Admission* is an
+  authority the filer does not hold.
+- **Resolution** *(untrusted; `flow:resolve`)* — the less-trusted role runs
+  *every* flow step — read intent, implement, test, gate locally — *except one*:
+  it cannot push to origin. It produces a candidate, a **PR**, never a landing.
+- **Review** *(trusted, back gate; `flow:review`/`flow:gate`)* — a trusted
+  session gates the candidate before it reaches origin: **merge** it, or
+  **return-to-sender** (item back to open with notes) — and, where the call
+  should rise to a person, **escalate** it, the *Engage* surface of §3.
+
+The **human sits atop the trust ladder**, reached only on escalation — the same
+deliberate hand-off used to renegotiate the correctness bound. Because **PRs are
+first-class items with their own identity**, a review binds to *that* candidate
+and never bleeds onto another. The same engine runs at any scale — a cloud
+production line draining a backlog across the arena farm, or a local `bin/flow auto`
+mini-line a single contributor self-caps; what changes is throughput, not the
+trust model.
+
+The resolve-then-PR boundary, trusted review, and return-to-sender are in the
+architecture today; the front **intake** gate — and review's escalate-to-human
+verdict — generalize the same shape to the moment of admission and to the §3
+hand-off. *PR intake is one instance of this pattern, not the whole of it.* The
+shape is the point: *untrusted work, bracketed by trusted gates, with the human
+at the top of the ladder.*
 
 ---
 
