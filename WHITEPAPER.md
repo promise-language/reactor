@@ -1,11 +1,3 @@
-<!-- Status: draft. Conceptual/methodology layer ABOVE docs/design.md (which is the
-     architecture). Reactor is pre-public; promise/flow/forge/reactor go public together,
-     so this doc ships when reactor opens. Keep claims at honest maturity (see §6):
-     assert the existence proof, frame quality as an open experiment, never bake a
-     build-duration number, quote the $200/mo tier (not a summed total).
-     Canonical term: Bounded-Autonomy Software Engineering (BASE); never revert to
-     "Autonomous Software Development" / "ASD". -->
-
 # Bounded-Autonomy Software Engineering
 
 *A white paper on building and maintaining large, complex software with AI agents
