@@ -296,7 +296,8 @@ at the top of the ladder.*
 ## 5. The worked example: Promise
 
 The strongest evidence for BASE is not a benchmark — it is an artifact built under
-it. **Promise** is a statically-typed, AOT-compiled systems language with a
+it. **[Promise](https://github.com/promise-language/promise)** is a
+statically-typed, AOT-compiled systems language with a
 multi-module standard library and a four-target toolchain (Linux, macOS, Windows,
 WASM). Its compiler, stdlib, and catalog are written by AI agents; humans direct
 the high-level design through design-decision docs. It is held to its bar by exactly the
