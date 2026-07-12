@@ -2,7 +2,8 @@
 
 *A white paper on building and maintaining large, complex software with AI agents
 under bounded autonomy — agents free over the HOW, held to a human-owned design
-specification — and on Reactor, the system that makes it work.*
+specification. [Reactor](https://github.com/promise-language/reactor) is one
+implementation of this approach.*
 
 ---
 
@@ -10,8 +11,11 @@ specification — and on Reactor, the system that makes it work.*
 
 The common verdict on AI-written code is that it tops out at "slop": fine for a
 snippet or a prototype, but unable to build — let alone *maintain* — a large,
-complex system without a human in the loop cleaning up after every step. This
-paper argues the ceiling is real but misattributed. It is not a ceiling on the
+complex system. The caveat usually buried in that verdict is the real story:
+*with a human in the loop cleaning up after every step*, agents already build
+large systems. What they cannot yet do is build and *maintain* one without a
+person on the critical path. This paper argues the ceiling is real but
+misattributed. It is not a ceiling on the
 *model*; it is a ceiling on the *system around the model*. Give an agent durable
 intent, a mechanical definition of "correct," an automated resolution loop, an
 orchestrator that holds state across a fleet, and a human who is engaged *by
@@ -38,9 +42,11 @@ right scaffolding*, not a *capability* problem waiting on a better model. The
 existence proof is concrete — the [Promise language](https://github.com/promise-language/promise)
 compiler, standard library, and catalog were built and are maintained this way,
 by agents under human design direction, on a single $200/month subscription.
-**Reactor** is the open-source orchestration system that runs the loop. This
-paper defines the methodology; [`docs/design.md`](docs/design.md) defines
-Reactor's architecture.
+The Promise language was built with a private implementation of BASE. **Reactor**
+is the open-source orchestration system that will run this same loop; it is at
+present an early-stage project — a design doc, not yet a working tool. This paper
+defines the methodology; [`docs/design.md`](https://github.com/promise-language/reactor/blob/main/docs/design.md) sketches Reactor's
+architecture.
 
 ---
 
@@ -51,8 +57,9 @@ middle. The distinction is not the model or the prompt — it is **where the hum
 sits relative to the build loop, and what bounds the work.**
 
 - **Assisted development** (copilots, chat-in-the-IDE) keeps the human *in* the
-  build loop: the agent proposes, the human accepts, edits, and drives. Throughput
-  is bounded by human attention, one keystroke at a time. No real autonomy.
+  build loop: the agent proposes, the human accepts and drives. Throughput
+  is bounded by human attention, one keystroke at a time. There is no real
+  autonomy — the human is on the critical path for every step.
 - **"Vibe coding"** removes the human but also removes the bar: generate
   something that runs once, ship it, hope. It is **unbounded autonomy** — no
   intent it must hold to, no quality it must clear — and it produces exactly the
@@ -80,14 +87,22 @@ Hand a capable model a large codebase and the naive instruction "improve it," an
 it degrades — not because it is unintelligent, but because the *environment* fails
 it in predictable ways:
 
-- **Context loss.** No memory survives between sessions; the agent re-derives
-  (and re-breaks) what it already knew.
-- **Drift.** Without a fixed definition of "done," each change pulls the codebase
-  toward a slightly different dialect, and the whole accretes inconsistency.
-- **No quality floor.** Nothing mechanically prevents a regression, a leak, or a
-  silent correctness loss; "looks right" is the only gate.
-- **No coordination.** Two agents (or two runs) collide, duplicate, or undo each
-  other; there is no shared backlog, no leases, no source of truth.
+- **Context loss.** What memory survives between sessions is limited, and much of
+  it is *re-derived by inspecting the very project being built* — so it captures
+  the codebase's current drift and builds on it rather than anchoring to the
+  original intent. The agent re-derives (and re-breaks) what it already knew.
+- **Drift.** With no human-owned design spec to anchor to, agents infer intent
+  from the existing code and docs — then invent new design parameters and build on
+  them. Each pass drifts further from the original objectives, and there is
+  nothing to pull it back.
+- **No quality floor.** With no mechanical gate, quality is whatever the agent
+  thinks it should be — judged against the project's existing quality, or the
+  training-average it defaults to. The bar ratchets *downward* each pass, and
+  regressions slip through as "pre-existing, not mine."
+- **No coordination.** Agents work independently, each seeing only its own slice —
+  not the whole, and not the environments it can't reach. With no coordinator to
+  oversee the system and sequence their sessions, agents collide, duplicate, or
+  undo each other, and work that must fit together drifts apart.
 
 Every one of these is an *engineering* problem with an *engineering* answer.
 Autonomy is not unlocked by waiting for the next model; it comes from building
@@ -95,12 +110,13 @@ the system that lets the current model work unattended without drifting. The mod
 is the engine. BASE is the rest of the car around it.
 
 A second, quieter lever sits underneath: **the language the agent builds in.**
-Mainstream languages were designed for humans reading in an IDE with full project
-context — full of hidden effects, implicit behavior, and many ways to do one
-thing, all of which make an agent's output hard to verify and maintain. A language
-where nothing is hidden, everything is explicit, and there is one obvious way to
-do each thing is itself part of the scaffolding. (That is the thesis of Promise,
-and the reason the worked example in §5 is self-referential.)
+BASE works with any language — but the language can help or fight it. Mainstream
+languages were designed for humans reading in an IDE with full project context —
+hidden effects, implicit behavior, and many ways to do one thing, all of
+which make an agent's output hard to verify and maintain. A language where nothing
+is hidden, everything is explicit, and there is one obvious way to do each thing
+makes BASE more effective and the software faster to build. (That is the thesis of
+Promise, and the reason the worked example in §5 is self-referential.)
 
 ---
 
@@ -117,6 +133,19 @@ high-level calls, and **work items** (in Reactor: GitHub issues, the single sour
 of truth) that define each unit of work. Intent lives in version control, not in a
 chat that scrolls away. An agent resolving an item reads the same definition every
 time; the design docs are the constitution it builds to.
+
+The human owns the *what*, but not every work item is human-written. Most are
+agent-filed — derived from the original intent and the context that surfaces while
+implementing it — so the backlog fans out from the human's design without the
+human authoring each line. The discipline is what keeps that fan-out anchored:
+when an item is resolved, anything that does not work as expected is either fixed
+inline or filed as a new work item traceable to the *what* (directly or through a
+design doc), **never worked around.**
+
+The contract itself is not static — it evolves as work surfaces contradictions or
+new needs, whether an agent or a human raises the change. But every revision is an
+*explicit, reviewable edit* to the artifact, never a silent drift. That amendment
+path is the *Engage* subsystem below.
 
 ### Guide — a mechanical definition of correct
 
@@ -206,12 +235,6 @@ resource*, and the system is engineered to spend as little of it as possible —
 minimizing engagement and routing around it where it can, never manufacturing a
 wait it could avoid.
 
-> **Design tenets.** Push domain logic to the project; keep the orchestrator thin.
-> Quality is mechanical, not social. Humans own intent; agents own implementation.
-> One identity authority (GitHub) so nothing leaks or drifts. Engage the human by
-> design — autonomous by default, escalated deliberately, blocking only when a
-> decision is too broad to route around.
-
 ---
 
 ## 4. Trust roles
@@ -264,7 +287,7 @@ multi-module standard library and a four-target toolchain (Linux, macOS, Windows
 WASM). Its compiler, stdlib, and catalog are written by AI agents; humans direct
 the high-level design through design-decision docs. It is held to its bar by exactly the
 machinery above: a work tracker, a multi-class gate system, a zero-memory-leak
-policy, and **13,000+ tests that gate every commit and stay green across all four
+policy, and **15,000+ tests that gate every commit and stay green across all four
 targets** — ratcheted so the count only climbs and failures stay at zero.
 
 Two facts make it a clean existence proof:
@@ -339,12 +362,16 @@ Credibility depends on not overclaiming. The state of the evidence, honestly:
 ## 8. The bet, restated
 
 Bounded-Autonomy Software Engineering is a falsifiable bet: that large, complex,
-maintainable software can be built and kept alive by agents under human design
-direction, with the human autonomous by default and engaged only by deliberate
-escalation — and that the thing standing between today and that future is
-*building the system around the model*, not
-waiting for a better model. The existence proof is on the table. The quality proof
-is being run in the open. The scaling question is honestly unanswered.
+maintainable software can be built and kept alive by agents working under human
+design direction — the system autonomous by default, the human off the critical
+path and engaged only by deliberate escalation. The claim is that what stands
+between today and that future is *building the system around the model*, not
+waiting for a better model.
 
-Reactor is the open-source bet that this is reproducible — not a story about one
-project, but a system anyone can run.
+The existence proof is on the table. The quality proof is being run in the open.
+The scaling question is honestly unanswered.
+
+Reactor is the open-source bet that this discipline is reproducible — not one
+project's story, but a system anyone can run. It is early yet: a design, not a
+finished tool. The wager is that what worked for Promise will work for any project
+run this way — not just the one that proved it.
