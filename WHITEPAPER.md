@@ -5,6 +5,20 @@ under bounded autonomy — agents free over the HOW, held to a human-owned desig
 specification. [Reactor](https://github.com/promise-language/reactor) is one
 implementation of this approach.*
 
+**Part of the [Promise project](https://promise-lang.org) · Revised July 2026**
+
+This paper stands on its own, but it is one piece of a larger, self-referential
+effort — the methodology it describes is the methodology that built the software it
+cites as proof:
+
+- **[Promise](https://github.com/promise-language/promise)** — a programming
+  language designed so agents write maintainable code, itself built and maintained
+  by agents under human design direction.
+- **[Reactor](https://github.com/promise-language/reactor)** — the open-source
+  system that implements the methodology (BASE) this paper defines.
+- **[The zoo](https://github.com/promise-language/zoo)** — a public gallery of real
+  programs built in Promise, where the quality claim is tested in the open.
+
 ---
 
 ## Abstract
