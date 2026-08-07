@@ -50,7 +50,7 @@ as a step proves infeasible, and as external requirements shift across the
 software's lifetime. When the spec proves contradictory, infeasible, or outdated,
 that triggers a **renegotiation of the bound** — escalated to the human, by
 design, not a failure (the *Engage* subsystem of §3). This is the disciplined
-middle between *assisted* development and unbounded *"vibe coding"* — §1 draws the
+middle between *assisted* development and unbounded *generate-and-hope* — §1 draws the
 line. We make a falsifiable claim about it: this is a problem of *building the
 right scaffolding*, not a *capability* problem waiting on a better model. The
 existence proof is concrete — the [Promise language](https://github.com/promise-language/promise)
@@ -66,15 +66,15 @@ architecture.
 
 ## 1. Bounded autonomy, not assisted
 
-BASE is not a coding assistant, and it is not "vibe coding." It is the disciplined
-middle. The distinction is not the model or the prompt — it is **where the human
-sits relative to the build loop, and what bounds the work.**
+BASE is not a coding assistant, and it is not generate-and-hope automation. It is
+the disciplined middle. The distinction is not the model or the prompt — it is
+**where the human sits relative to the build loop, and what bounds the work.**
 
 - **Assisted development** (copilots, chat-in-the-IDE) keeps the human *in* the
   build loop: the agent proposes, the human accepts and drives. Throughput
   is bounded by human attention, one keystroke at a time. There is no real
   autonomy — the human is on the critical path for every step.
-- **"Vibe coding"** removes the human but also removes the bar: generate
+- **Generate-and-hope** removes the human but also removes the bar: produce
   something that runs once, ship it, hope. It is **unbounded autonomy** — no
   intent it must hold to, no quality it must clear — and it produces exactly the
   slop the critics describe.
