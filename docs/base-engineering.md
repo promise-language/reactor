@@ -96,16 +96,49 @@ That asymmetry constrains the layout directly:
 - **Nothing public may take a build-time dependency on anything private.** Public Reactor cannot
   depend on private `workspace`.
 
-That last point forces a question worth answering explicitly: **does Reactor build flows, or only
-distribute them?** If Reactor's release pipeline builds flow binaries, it needs flow source — and
-private source would make the public repo unbuildable. If Reactor is a **binary registry** that
-serves artifacts built elsewhere, it needs no flow source at all, and the visibility problem
-disappears along with a pile of build-matrix complexity.
+That last point forces a question worth answering explicitly, and the answer settles more than
+visibility.
 
-Registry-only is almost certainly right, and not just for the visibility reason: it keeps Reactor
-thin, which is the guiding principle everywhere else in this design. Reactor knowing how to build
-every project's flows would make it the opposite of thin. What Reactor needs is the artifact, its
-`(project, flow, os, arch)` key, and something to verify it with — not the source it came from.
+### Who builds flows
+
+**The companion repo builds its own flow in its own CI and publishes a release. Reactor builds
+nothing.**
+
+Reactor ingests the published artifact, verifies it, and serves it onward to runners. That single
+choice resolves several problems at once:
+
+- **Visibility stops mattering.** Reactor never needs flow source, so a public Reactor can serve a
+  private project's flow without depending on anything private.
+- **Reactor stays thin.** Knowing how to build every orchestrated project's flow is the opposite of
+  thin, and would drag every project's toolchain into Reactor's release pipeline.
+- **The build matrix decentralizes.** Each companion repo runs its own cross-platform CI — which is
+  the same native-matrix approach the fleet binaries already use, and it scales by addition rather
+  than by Reactor growing a job per project.
+- **Ownership follows the code.** Whoever maintains a project's flow owns its build and release,
+  without commit access to Reactor.
+
+**Runners still fetch only from Reactor.** Reactor mirrors the release rather than redirecting
+runners to it, which preserves the
+[outbound-to-Reactor-only invariant](design.md#deployment-topology--server-governor-runner): an
+arena with tightly restricted egress needs no path to a code-hosting site, and there is one trust
+path to verify instead of two. Verification happens once, when Reactor ingests the release.
+
+### One binary per project
+
+**A project needs exactly one flow binary.** A flow is self-describing, so a single binary can carry
+the resolution logic for every item type the project defines, and every step — including steps that
+only certain roles may run. The distribution key is therefore `(project, os, arch)`, not
+`(project, flow, os, arch)`: one artifact per project per platform, and the build matrix is
+platforms only.
+
+**One binary does not weaken the authority model**, which is the natural worry — shouldn't an
+untrusted step get a smaller binary containing less dangerous code? No, and the reason is the
+model's central premise: **capability comes from the environment, not from what code is present.**
+The flow is never trusted to limit itself, so what it *could* do given credentials it does not have
+is irrelevant. A binary containing merge logic, invoked for a `plan` step, cannot merge — it holds
+no credential that would let it, and the API would reject the call. Splitting binaries to
+constrain behavior would be defending with the one mechanism the design explicitly does not rely
+on.
 
 ### Naming the shared layer
 
@@ -178,11 +211,11 @@ avoid.
   the language unification: the wire types become a module **shared with Reactor** rather than
   a second copy kept in sync by hand.
 
-  Flow binaries are built per `(project, flow, os, arch)` and served by the Reactor server alongside
-  the governor and runner builds it already distributes; the runner resolves which project it is
-  working on and fetches that project's flow for its platform. **Flows are project-specific, so this
-  set multiplies with the number of projects** — unlike the fleet binaries, which are generic. The
-  project repo carries no flow implementation and no prompt templates.
+  One binary serves a whole project — see [One binary per project](#one-binary-per-project) — built
+  by the companion repo's CI per `(project, os, arch)` and served by the Reactor server alongside
+  the governor and runner builds it already distributes. The runner resolves which project it is
+  working on and fetches that project's binary for its platform. The project repo itself carries no
+  flow implementation and no prompt templates.
 
   One property of the installed file is load-bearing: **it IS the flow binary** — no launcher, no
   wrapper script — so a caller waits on a single process and a kill targets it directly. Whatever
@@ -227,11 +260,9 @@ contract.
 The delivery split above is language-independent, so neither side changes shape. What changes is
 what each side needs from the platform.
 
-**Flows — nothing new.** They stay prebuilt binaries served per `(project, flow, os, arch)`, so they
-inherit the same build story as the runner and governor: a native CI matrix today, one job once
-`--target` cross-compilation lands. That matrix matters more for flows than for the fleet, since it
-multiplies per project. Because the artifact is a real binary, the no-launcher property holds for
-free.
+**Flows — nothing new.** They stay prebuilt binaries served per `(project, os, arch)`, built by the
+companion repo's own CI: a native platform matrix today, one job once `--target` cross-compilation
+lands. Because the artifact is a real binary, the no-launcher property holds for free.
 
 **Gates — this is where `promise run` matters, for Promise-based gates.** A gate must come from the
 tree under test, so it is built or run from source in the worktree on every execution. For a Promise

@@ -387,13 +387,17 @@ introduce a server→host connection.
   differently:
   - **Fleet binaries** (governor, runner) — keyed by `(os, arch)`. Generic: one set serves every
     project in the deployment.
-  - **Flow binaries** — keyed by `(project, flow, os, arch)`. **Flows are project-specific**, so
-    this set multiplies with the number of projects Reactor orchestrates, and the runner must
-    resolve *which* project's flow it needs before fetching (it already identifies the project
-    from the worktree's origin, and refuses to guess when it cannot). The runner resolves the flow
-    version **per step rather than per item**, so a flow fixed mid-resolution is picked up by the
-    remaining steps of work already in flight — see
+  - **Flow binaries** — keyed by `(project, os, arch)`. **One binary per project**: a flow is
+    self-describing, so a single binary can carry the resolution for every item type and every
+    step the project defines. The runner identifies which project it is working on from the
+    worktree's origin (and refuses to guess when it cannot), then fetches that project's current
+    binary for its platform. The version is resolved **per step rather than per item**, so a flow
+    fixed mid-resolution is picked up by the remaining steps of work already in flight — see
     [base-engineering.md](base-engineering.md#the-principle) for why that matters.
+
+  Reactor **builds neither class**. Each is built by its own repo's CI and published as a release;
+  Reactor ingests the release, verifies it, and serves it onward. See
+  [Who builds flows](base-engineering.md#who-builds-flows).
 - **Ingress for GitHub events** — PR-open and related signals routed to the scheduler.
 
 **Runner** (`bin/runner`, one per workspace). Long-lived. Registers with the server advertising its
@@ -612,9 +616,10 @@ subprocess supervision, the repo-backed stores' data handling, and the concurren
   outside it.** Gates are built from the commit under test and never distributed prebuilt. Flows
   are project-specific but versioned outside the project source, so a flow fix never contends with
   in-flight work in a worktree.
-- **Reactor distributes flow binaries**, keyed by `(project, flow, os, arch)`, over the same
-  channel as the governor and runner builds. The runner resolves the flow **per step, not per
-  item**, so a mid-resolution fix is picked up by an item's remaining steps.
+- **Reactor distributes flow binaries but builds none of them.** One binary per project, keyed by
+  `(project, os, arch)`, built by the companion repo's CI and published as a release that Reactor
+  ingests and serves. The runner resolves the version **per step, not per item**, so a
+  mid-resolution fix is picked up by an item's remaining steps.
 - **Reactor is three deployables, not one** — `bin/reactor` (cloud), `bin/runner` and
   `bin/governor` (in the workspace, on other machines or containers).
 - **The server never reaches into a host.** Runners always initiate outbound and long-poll. Cloud
