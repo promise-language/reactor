@@ -33,11 +33,13 @@ bound the agent works to. Reactor is the system that runs that loop.
 
 ## What Reactor provides
 
-Reactor is the **orchestrator** — thin by design, with domain logic pushed out of
-it. A project owns and builds its **gates**, because a gate measures the project's
-own tree. **Flows** are project-specific but deliberately versioned *outside* the
-project source, so fixing one never collides with work already in flight; Reactor
-builds and distributes them:
+Reactor is the **orchestrator** — thin by design, and reusable across projects
+rather than built around any one of them. Domain logic is pushed out of it along
+a single line: **a gate measures the tree, so it comes from the tree** (the
+project owns and builds it), while **a flow modifies the tree, so it comes from
+outside the tree** (project-specific, but versioned elsewhere so fixing one never
+collides with work already in flight). Reactor builds neither — it distributes
+flows that each project's CI publishes:
 
 - **Durable intent.** Work items are GitHub issues — the single source of truth —
   and design-decision docs in version control, not a chat that scrolls away.
@@ -75,19 +77,53 @@ declared where the agents they constrain cannot reach them. The same engine runs
 at any scale, from a production line draining a backlog to a single contributor
 resolving one issue under a restricted role. *(White paper §4.)*
 
+## How it runs
+
+Three processes, and the split is deliberate:
+
+- **The server** is cloud-hosted. It holds all state, makes every dispatch
+  decision, serves the admin UI, checks authority on every mutation, and
+  distributes binaries.
+- **A runner** lives in each workspace — a developer's machine, a container, an
+  ephemeral cloud VM — and executes the work: flows, gates, worktree preparation.
+- **A governor** supervises the runner on each host, restarting it and swapping
+  in updates.
+
+**The server never reaches into a host.** Runners always open the connection
+themselves and poll for work, so they can sit behind NAT, inside containers, and
+on machines that come and go — no inbound firewall holes, no SSH credentials, no
+per-host reachability to arrange.
+
+Work runs in separate processes rather than inside the orchestrator. That is what
+makes a failure isolatable, a resource limit real, and a hung agent killable —
+the properties unattended operation actually depends on.
+
 ## Status
 
-**Early bootstrap.** The repo today is the [forge](https://github.com/promise-language/forge)
-tooling blueprint, the licenses, the [white paper](WHITEPAPER.md), and the
-[design doc](docs/design.md). The architecture is still settling (the authority
-model and the BASE-layer boundary are both open), so a build order is
-deliberately not yet fixed.
+**Early bootstrap — design, not yet engine.** The repo today is the
+[forge](https://github.com/promise-language/forge) tooling blueprint, the
+licenses, the [white paper](WHITEPAPER.md), and the
+[design docs](docs/design.md).
+
+Two objectives govern the work: a **clean, reusable BASE implementation that
+applies to many projects**, and **running reliably unattended for prolonged
+periods**. They meet in the authority model — when nobody is watching, the only
+thing between a mistake and damage is what an agent was *able* to do, which is
+why the guardrails are load-bearing rather than decorative.
+
+Settled enough to build against: the process topology, the gate and flow
+contracts, and where each piece lives. Still open: the capability vocabulary the
+authority model is expressed in, and which repo owns the reusable BASE layer.
+A build order is deliberately not fixed until those close.
 
 Reactor is written in **[Promise](https://github.com/promise-language/promise)**,
-which makes it the platform's first large application as well as its
-orchestrator — as are the runner, the governor, and the flows. A project's own
-gates may be written in any language: that boundary is a JSON contract over a
-subprocess, so BASE can orchestrate a project it shares no runtime with.
+as are the runner, the governor, and the flows — making it the platform's first
+large application as well as its orchestrator. That is a real bet, not a
+formality: Reactor needs TLS, DNS, crypto, and a concurrent HTTP server that
+Promise does not have yet, and those gaps are tracked as platform requests rather
+than worked around. A project's own gates may be written in any language, since
+that boundary is a JSON contract over a subprocess — so BASE can orchestrate a
+project it shares no runtime with.
 
 The bet is falsifiable, and the evidence is staged honestly:
 
@@ -115,8 +151,14 @@ Reactor is one of several sibling repos:
 - **Reactor** — orchestration: the production line that drains a backlog across
   the arena farm.
 
-How these consolidate is [an open question](docs/base-engineering.md#what-lives-where):
-the reusable BASE machinery is currently spread across several of them.
+Each orchestrated project also has a **companion repo** holding its own BASE
+setup — flow steps, item types, prompts, and authority config — kept outside the
+project source so that fixing a flow never contends with work in flight, and so
+an agent cannot edit the rules that bound it.
+
+How the reusable machinery consolidates is
+[an open question](docs/base-engineering.md#what-lives-where): it is currently
+spread across several of these repos.
 
 ## Build
 
