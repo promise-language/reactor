@@ -44,7 +44,12 @@ jobs:
         run: promise version
 
       - name: Build release binary
-        run: promise build -release -o bin/reactor cmd/reactor
+        # bin/ is gitignored, so a fresh checkout does not have it and the
+        # linker will not create the output directory itself.
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          promise build -release -o bin/reactor cmd/reactor
 
       - name: Smoke-test the binary
         # A release build that cannot start is not a release build. Cheap now,
