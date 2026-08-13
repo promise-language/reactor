@@ -298,11 +298,11 @@ at the top of the ladder.*
 The strongest evidence for BASE is not a benchmark — it is an artifact built under
 it. **[Promise](https://github.com/promise-language/promise)** is a
 statically-typed, AOT-compiled systems language with a
-multi-module standard library and a four-target toolchain (Linux, macOS, Windows,
-WASM). Its compiler, stdlib, and catalog are written by AI agents; humans direct
+multi-module standard library and a five-target toolchain (Linux x86-64 and
+arm64, macOS, Windows, WASM). Its compiler, stdlib, and catalog are written by AI agents; humans direct
 the high-level design through design-decision docs. It is held to its bar by exactly the
 machinery above: a work tracker, a multi-class gate system, a zero-memory-leak
-policy, and **15,000+ tests that gate every commit and stay green across all four
+policy, and **17,000+ tests that gate every commit and stay green across all five
 targets** — ratcheted so the count only climbs and failures stay at zero.
 
 Two facts make it a clean existence proof:

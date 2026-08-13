@@ -129,8 +129,9 @@ The bet is falsifiable, and the evidence is staged honestly:
 
 - **Proven — scale.** Agents built and maintain a large, complex, long-lived
   systems project — the [Promise](https://github.com/promise-language/promise)
-  language, compiler, standard library, and catalog, gated by 13,000+ tests
-  across four targets — under one person's design direction.
+  language, compiler, standard library, and catalog, gated by 17,703 tests
+  across five targets (Linux x86-64 and arm64, macOS, Windows, WASM) as of
+  August 2026 — under one person's design direction.
 - **In progress — quality.** Whether agents can take a genuinely complex problem
   and build a correct, maintainable solution *on* the platform with limited
   oversight is being tested in the open, in the [zoo](https://github.com/promise-language/zoo).
