@@ -168,7 +168,7 @@ that compiles every dev tool into `bin/`:
 
 ```sh
 ./make        # compile dev tools into bin/ (verify, guard, precommit, setup)
-bin/verify    # the commit gate: format → vet → build → test
+bin/verify    # the commit gate: format → build → test
 ```
 
 `bin/` is gitignored; tools are built on demand, never committed.
@@ -176,6 +176,19 @@ bin/verify    # the commit gate: format → vet → build → test
 That apparatus exists to work around limits of the Go toolchain, and is expected
 to go away rather than be ported — see
 [Promise dev tooling](docs/promise-forge.md).
+
+Reactor itself is a Promise program. Install the toolchain from the
+[latest release](https://github.com/promise-language/promise/releases/latest),
+then:
+
+```sh
+promise run cmd/reactor                        # run in place
+promise build -release -o bin/reactor cmd/reactor
+```
+
+Each deployable is its own Promise module under `cmd/` — `reactor` today, with
+`runner` and `governor` to follow. CI builds the linux-amd64 release binary from
+`main`.
 
 ## Contributing
 

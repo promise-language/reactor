@@ -1,0 +1,6 @@
+// Command reactor is the BASE orchestration server. This is a skeleton — the
+// architecture, the authority model, and the deployment topology live in
+// docs/design.md; the engine itself is not built yet.
+main() {
+  print_line("reactor: skeleton — not yet implemented (see docs/design.md)");
+}

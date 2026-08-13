@@ -1,0 +1,45 @@
+name: Build (linux-amd64)
+
+# Builds the release binary for linux x86-64 from main. Pull requests are not
+# built here — this is the artifact-producing job, not the commit gate.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: reactor · linux-amd64 · release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Promise
+        # The installer fetches the self-contained compiler (stdlib, catalog,
+        # and LLVM tools embedded) and sets up ~/.promise.
+        run: |
+          curl -sSfL https://github.com/promise-language/promise/releases/latest/download/install.sh | sh
+          echo "$HOME/.promise/bin" >> "$GITHUB_PATH"
+
+      - name: Report toolchain
+        run: promise version
+
+      - name: Build release binary
+        run: promise build -release -o bin/reactor cmd/reactor
+
+      - name: Smoke-test the binary
+        # A release build that cannot start is not a release build. Cheap now,
+        # and the hook for a real health check once there is something to check.
+        run: ./bin/reactor
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reactor-linux-amd64
+          path: bin/reactor
+          if-no-files-found: error
+          retention-days: 30

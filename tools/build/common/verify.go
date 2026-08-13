@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -60,31 +61,71 @@ func RunVerify(repoRoot string, args []string) error {
 	return nil
 }
 
-func verifySteps(repoRoot string) []step {
-	if Exists(filepath.Join(repoRoot, "go.mod")) {
-		return []step{
-			{"format", func(r string) error { return RunIn(r, "gofmt", "-w", ".") }},
-			{"vet", func(r string) error { return RunIn(r, "go", "vet", "./...") }},
-			{"build", func(r string) error {
-				// Build into a throwaway dir so a single-main-package tree
-				// (e.g. just cmd/reactor) does not litter the worktree with a
-				// stray binary. -o <dir> writes each main package's output
-				// there and discards non-main packages; works for one or many.
-				out, err := os.MkdirTemp("", "reactor-build-")
-				if err != nil {
-					return err
-				}
-				defer os.RemoveAll(out)
-				return RunIn(r, "go", "build", "-o", out, "./...")
-			}},
-			{"test", func(r string) error { return RunIn(r, "go", "test", "./...") }},
+// PromiseProjects returns the Promise project directories under cmd/, sorted —
+// one per deployable (reactor, and later runner and governor). A directory
+// counts as a project when it carries its own promise.toml; that manifest is
+// what makes it a module with its own main(), so this list is exactly the set
+// of binaries the repo produces.
+func PromiseProjects(repoRoot string) []string {
+	entries, err := os.ReadDir(filepath.Join(repoRoot, "cmd"))
+	if err != nil {
+		return nil
+	}
+	var projects []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		rel := filepath.Join("cmd", e.Name())
+		if Exists(filepath.Join(repoRoot, rel, "promise.toml")) {
+			projects = append(projects, rel)
 		}
 	}
-	stub := func(label string) step {
-		return step{label, func(r string) error {
-			fmt.Printf("    (stub) wire up your %s command in tools/build/common/verify.go\n", label)
-			return nil
-		}}
+	sort.Strings(projects)
+	return projects
+}
+
+func verifySteps(repoRoot string) []step {
+	projects := PromiseProjects(repoRoot)
+	if len(projects) == 0 {
+		stub := func(label string) step {
+			return step{label, func(r string) error {
+				fmt.Printf("    (stub) no Promise projects under cmd/ — nothing to %s\n", label)
+				return nil
+			}}
+		}
+		return []step{stub("format"), stub("build"), stub("test")}
 	}
-	return []step{stub("format"), stub("vet"), stub("build"), stub("test")}
+
+	// Each project is built to a throwaway dir so verify never litters the
+	// worktree with a stray binary; bin/ is for deliberate builds only.
+	eachProject := func(fn func(r, project string) error) func(string) error {
+		return func(r string) error {
+			for _, p := range projects {
+				if err := fn(r, p); err != nil {
+					return fmt.Errorf("%s: %w", p, err)
+				}
+			}
+			return nil
+		}
+	}
+
+	return []step{
+		{"format", eachProject(func(r, p string) error {
+			return RunIn(r, "promise", "format", p)
+		})},
+		{"build", eachProject(func(r, p string) error {
+			out, err := os.MkdirTemp("", "reactor-build-")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(out)
+			return RunIn(r, "promise", "build", "-o", filepath.Join(out, filepath.Base(p)), p)
+		})},
+		// `promise test` exits 0 and prints "no test files found" when a project
+		// has none, so this is a no-op until tests exist rather than a failure.
+		{"test", eachProject(func(r, p string) error {
+			return RunIn(r, "promise", "test", p)
+		})},
+	}
 }
