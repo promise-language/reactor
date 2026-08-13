@@ -19,10 +19,25 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Promise
-        # The installer fetches the self-contained compiler (stdlib, catalog,
-        # and LLVM tools embedded) and sets up ~/.promise.
+        # Installs the epoch this project declares, read straight from
+        # promise.toml so the toolchain and the manifest cannot drift apart.
+        #
+        # Pinned to the epoch tag rather than /releases/latest/: "latest" is
+        # whichever release was published most recently, which includes
+        # dependency-blob releases that carry no install.sh.
+        #
+        # pipefail matters here — without it `curl | sh` reports sh's status, so
+        # a failed download would sail through and surface later as
+        # "promise: command not found".
         run: |
-          curl -sSfL https://github.com/promise-language/promise/releases/latest/download/install.sh | sh
+          set -euo pipefail
+          epoch="$(sed -n 's/^epoch[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' cmd/reactor/promise.toml)"
+          if [ -z "$epoch" ]; then
+            echo "no epoch declared in cmd/reactor/promise.toml" >&2
+            exit 1
+          fi
+          echo "Installing Promise epoch $epoch"
+          curl -sSfL "https://github.com/promise-language/promise/releases/download/epoch-${epoch}/install.sh" | sh
           echo "$HOME/.promise/bin" >> "$GITHUB_PATH"
 
       - name: Report toolchain
