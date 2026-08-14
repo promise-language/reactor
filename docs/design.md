@@ -37,7 +37,8 @@ and flows that turn out to be buggy, with nobody watching. This is a design cons
 operational aspiration: it is why the runner reconnects outbound instead of being reachable, why the
 governor supervises the runner, why leases are reclaimable, why interrupted work resumes rather than
 restarts, why quota exhaustion pauses instead of crashing, and why a flow can be fixed and picked up
-mid-resolution.
+mid-resolution. What that objective demands mechanically —
+[never stall, never spin](#reliability--never-stall-never-spin) — is its own section.
 
 **The two objectives meet in the authority model.** When a person is watching, a step that does
 something it shouldn't gets caught. Unattended, the only thing between a mistake and damage is what
@@ -311,8 +312,9 @@ GitHub-identity deployment; it is never a second source of item identity.
 ### ConfigStore — the deployment owner's residual
 
 Deliberately minimal: only things the project *can't* own because they are the **deployment
-owner's** choice — quota and cost limits, model credentials, arena allocation and provider creds,
-admin access control. Flows and gates are **not** here; they live in the project.
+owner's** choice — quota and cost limits, model credentials, arena allocation and provider creds
+(including [how long an absent arena is held before it is declared
+lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)), admin access control. Flows and gates are **not** here; they live in the project.
 
 ### LedgerStore — per-server active state
 
@@ -403,6 +405,9 @@ introduce a server→host connection.
 **Runner** (`bin/runner`, one per workspace). Long-lived. Registers with the server advertising its
 host OS, arch, role, and capabilities, then long-polls for actions: run a flow binary, run a gate,
 prepare a worktree, provision an arena (in the arena-host role). Streams output back as it goes.
+Every one of those actions is a **child process the runner spawns, watches, and bounds by a
+deadline** — the runner does no work in its own address space, and holds no wait it cannot tie to a
+live pid ([Reliability](#nothing-runs-unwatched)).
 **The runner self-updates** — that is what makes shipping new runner code to a deployed fleet
 automatic after a server upgrade, with no operator work per host.
 
@@ -458,6 +463,230 @@ what was downloaded. That the *governor* needs the hash check is worth noting: i
 updatable component in the system, so its integrity check is the one that most needs to be right
 the first time.
 
+## Reliability — never stall, never spin
+
+[Objective 2](#objectives) is "runs reliably unattended for prolonged periods." Unattended, that
+decomposes into exactly two failure modes, and they pull in opposite directions:
+
+> **Never stall.** Nothing waits on something that will never arrive. Every wait is backed by a
+> live process and bounded by a deadline.
+>
+> **Never spin.** Nothing that costs tokens, money, or machine time runs twice unless the second
+> run can do something the first could not. Every attempt must make progress in some form.
+
+The first without the second gives an infinitely patient system that burns a quota re-running an
+attempt that cannot succeed. The second without the first gives a thrifty system that silently
+waits forever. Both are unattended failures with nobody there to notice, so both are invariants.
+
+### Nothing runs unwatched
+
+**Everything the runner causes to happen is a separate OS process with a pid** — a flow step, a
+gate, a gate preflight, worktree setup, arena provisioning, a self-update swap. The runner performs
+no work in its own address space; it spawns, watches, and reports. This is the operational half of
+the [process-boundary argument](#seams-are-process-boundaries--by-design-not-by-accident): a
+boundary only buys fault isolation, resource bounds, and killability if something is actually
+holding the pid and watching it.
+
+From that, a set of rules that admit no exceptions:
+
+- **Every child is registered before it can do anything, and deregistered only on a reaped exit.**
+  The registry entry carries the pid, the process start time, what the process is for (item, step,
+  gate), its deadline, and the wait-state it backs.
+- **"Waiting for X" is never a belief, always a pid.** Every waiting state in the runner and every
+  in-flight lease on the server traces to a live registry entry. When the process behind it is
+  gone, the wait ends — with a result if it exited, with a failure if it vanished. There is no code
+  path where the process dies and the wait outlives it.
+- **Every child has a deadline. There are no unbounded waits.** A step that declares no timeout
+  gets the deployment default; a step that legitimately takes hours raises the number. "No timeout"
+  is not a configurable value, because a hung agent is indistinguishable from a slow one and only
+  the clock can tell them apart.
+- **Liveness comes from the operating system, not from output.** Silence is not death and output is
+  not progress — an agent can stream tokens forever while accomplishing nothing. The watchdog waits
+  on the *process*; the deadline bounds it. Streamed output is telemetry. A heartbeat from the child
+  would be an inference too; the process table is the only thing that is not a guess.
+- **Kill the tree, not the child.** A flow spawns an agent, which spawns a compiler. Escalation on
+  deadline is: graceful signal → grace period → hard kill of the whole process group → confirm
+  reaped. A grandchild that survives is an orphan, and an orphan is a **reported fault**, not silent
+  debris — an arena that accumulates them is a machine that stops working eventually.
+- **Termination always produces a verdict.** Clean exit, non-zero exit, deadline kill, signal, or
+  disappeared-without-status — each maps to a distinct, recorded step outcome. Nothing terminates
+  into ambiguity, because an ambiguous outcome is what later becomes a stall.
+- **A runner restart adopts nothing.** Pids recorded before a crash belong to a previous life: the
+  runner no longer holds their pipes and cannot reconstruct their state. On start it kills what it
+  recorded — matching pid *and* start time, so pid reuse cannot make it kill a stranger — fails
+  those steps with a stated reason, and releases their leases.
+- **The server assumes runners disappear.** Leases are time-bounded and reclaimable, the governor
+  covers a dead runner, and nothing covers a dead machine — so no correctness property may depend on
+  cleanup code having run. Every wait on the server side expires on its own.
+
+### Every exclusion is held by a process, never by a flag
+
+Serialization is where unattended systems die quietly. Anything that says *only one at a time* — the
+global "an integration is in progress" lock, the per-host "verify is running here" lock, an
+exclusive worktree, an arena assignment, a claimed item's lease — is the same primitive, and it
+obeys one rule:
+
+> **A lock is not a flag; it is a lease naming its holder as `(host, pid, process start time)`.**
+> When that process is gone, the lock is gone. Releasing it is not a step the holder has to
+> remember to perform.
+
+That generalizes past locks to **every piece of persisted global state**. Each entry is in exactly
+one of two forms — **held**, naming a process that is currently executing, or **timed**, carrying an
+expiry that passes on its own — and there is no third form. Nothing persists on the strength of
+having once been written, because a record that is neither owned nor expiring is one that only a
+human can clear, and there is no human.
+
+- **There is no "release" code path to get wrong.** The holder's *existence* is the lock. Explicit
+  release is an optimization that returns the resource sooner, never the mechanism — because the
+  one case that matters is the case where the holder never got to run its cleanup.
+- **A lock nobody holds is not a lock.** A lock whose holder cannot be named as a live process is
+  invalid on sight and is reclaimed. There is no "stale, probably still needed" state to reason
+  about at three in the morning.
+- **The start time is not optional.** `(host, pid)` alone is reusable — a rebooted machine hands the
+  same pid to something else, and the lock silently transfers to an innocent process. The triple is
+  what makes "is the holder still alive?" answerable rather than probable.
+- **Reclamation is the server's job, not the holder's.** Every lease carries an expiry the holder
+  renews while it lives. A holder that stops renewing loses the lock whether it crashed, was killed,
+  lost the network, or had its whole host disappear — and a holder that was merely partitioned
+  discovers on its next renewal that it no longer holds the lock, and must stop rather than assume.
+- **Every reclamation is recorded.** A lock taken away from a dead holder means work was interrupted
+  mid-flight; that fact belongs in the ledger with the holder's identity and the reason, not
+  silently swept up. It is also the honest signal that something is crashing repeatedly.
+
+This is the same discipline as [nothing runs unwatched](#nothing-runs-unwatched), applied to state
+instead of execution: a wait is backed by a pid, and so is a lock. A deployment where one crashed
+process wedges the whole fleet behind a stuck integration lock is exactly the unattended failure
+objective 2 exists to rule out.
+
+#### A host that is merely off is not a host that is gone
+
+One expiry cannot serve both cases. A runner that vanishes mid-step is blocking the fleet *now*; an
+arena whose machine is closed for the night is not blocking anything and will very likely be back.
+Reaping both on the same clock forces a choice between a fleet that wedges and a fleet that
+reprovisions itself every time somebody shuts a lid. So there are two clocks, and they differ by
+orders of magnitude:
+
+| | Renewed | Expires in | On expiry |
+|---|---|---|---|
+| **Work leases** — item claims, the integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
+| **Arena reservation** — the arena's identity, provisioned state, and assignment to a project | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
+
+**Work never waits on a returning host.** The moment a runner stops renewing, everything it was
+holding is reclaimed and its items are dispatchable again — the long clock applies only to the
+*reservation*, never to the work. Otherwise the second clock would reintroduce exactly the stall the
+first one exists to prevent.
+
+**What "declared lost" means is deliberate.** Not "offline", not "degraded" — the reservation is
+force-dropped, the capacity returns to the pool, and an ephemeral arena is reaped at its provider.
+The state on it is written off, not awaited.
+
+- **Anything on a lost arena is gone.** Uncommitted worktree state, local caches, partial artifacts,
+  output that was never streamed. There is no "it might come back with the work still in it" —
+  everything that matters must already have been streamed to the server or committed, and treating
+  the arena as a possible source of truth later is what turns a temporary absence into permanent
+  corruption.
+- **A host that reappears after being declared lost is a new arena.** It re-registers, reprovisions
+  from scratch, and resumes nothing. Any lock it believes it holds already belongs to somebody else,
+  so it must re-acquire before touching anything — a returning runner that trusted its own memory
+  would be a second writer against state that has moved on without it.
+- **The write-off is a ledger record, not a log line.** It names the arena and its host, how long it
+  was absent, which leases, items, and artifacts died with it, and what had already been spent on
+  them. That record is what lets the affected items be requeued with honest history instead of
+  reappearing as mysteries — and a host that accumulates these is a machine to take out of the pool,
+  which is only visible if the losses are counted.
+- **The threshold is the deployment owner's, not the project's** — it belongs in
+  [ConfigStore](#configstore--the-deployment-owners-residual) with the rest of arena allocation. A
+  CI arena farm may want thirty minutes; a fleet of developer laptops wants to survive a long
+  weekend.
+
+### Infrastructure failures and process failures are different things
+
+Everything that can go wrong falls into one of two classes, and conflating them is how an
+unattended system either spins forever or fills its backlog with items marked failed that were
+never actually tried.
+
+> **Infrastructure failure** — the model API is down, the model quota is exhausted, GitHub is
+> unreachable, the arena was preempted, the network dropped, a disk filled. The *work* was never
+> evaluated. These say nothing whatsoever about the item.
+>
+> **Process failure** — a gate failed, the code did not compile, the agent produced nothing usable,
+> a conflict could not be resolved, a step exceeded its deadline. The work *was* evaluated, and this
+> is the answer.
+
+**The distinguishing test is not "is it transient?" but "did the work get evaluated?"** A process
+failure is a result and is recorded as one. An infrastructure failure is the absence of a result,
+and recording it as one is a lie the system then acts on.
+
+Everything else follows from that:
+
+- **An infrastructure failure is not the item's fault, and must not be charged to it.** It does not
+  consume the item's attempt budget, does not feed [loop
+  detection](#every-attempt-must-make-progress), does not mark the item failed, and does not park it
+  for a human. Otherwise a two-hour GitHub outage quietly burns down every item's retry budget and
+  leaves a backlog of items that look tried and were not.
+- **They are handled fleet-wide, not per item.** Quota exhaustion and a downed dependency are
+  properties of the *deployment*, so the scheduler stops dispatching everything that needs that
+  dependency and probes it from one place. Letting N items each independently rediscover the same
+  outage is itself a [never-spin](#every-attempt-must-make-progress) violation — N times the cost
+  for one piece of information. Backoff and the circuit breaker are shared, not per item.
+- **Quota exhaustion is a scheduled resumption, not an error at all.** The reset time is usually
+  known; the right response is to pause dispatch until it and then continue, not to retry into a
+  wall or fail the work that was in flight.
+- **Infrastructure failures are resumable at the step boundary.** The step is already the unit with
+  a declared grant and a resolved flow version, so resumption re-runs the *step*, not the item —
+  which is what "interrupted work resumes rather than restarts" means concretely. It puts a real
+  requirement on flows: **a step must be re-runnable from its declared inputs**, and any step with
+  an external side effect (a push, a PR creation, a merge) must be idempotent by construction —
+  keyed on the item and check-then-act against the API — because the failure that interrupted it may
+  well have landed after the effect and before the acknowledgement.
+- **Classification happens where the failure is raised, never by pattern-matching a message later.**
+  The error carries its class from the point of origin; a string-matched taxonomy reclassifies
+  itself the first time an upstream error message changes wording.
+- **An unclassified failure is treated as a process failure.** The two mistakes are not symmetric:
+  calling a process failure "infrastructure" retries it forever, while calling an infrastructure
+  failure "process" costs a human one look at an item that stopped. Default to the one that stops.
+- **A deadline kill is a process failure**, for the same reason. A hung step might have been blocked
+  on a sick dependency, but it might equally be an agent looping, and treating timeouts as
+  infrastructure gives the one failure mode that *always* recurs an unlimited retry budget. A step
+  that hangs because a dependency is down will be caught by the fleet-level pause anyway, from the
+  side that can actually tell.
+
+Note that neither class needs the *holder* rules relaxed: an infrastructure failure that takes out
+the runner still releases its [leases](#every-exclusion-is-held-by-a-process-never-by-a-flag) and
+still requeues the item. Being resumable is about not losing the work, never about holding a lock
+across the outage.
+
+### Every attempt must make progress
+
+The rule, and it applies to any work that costs tokens, arena time, or money:
+
+> **A retry must differ from the attempt it repeats** — different input, different tree state,
+> different flow code, or a narrowed problem. Repeating an identical attempt against identical
+> state is a bug, not resilience.
+
+- **The two failure classes retry differently, and that is the whole point of separating them.** A
+  process failure is *never* retried unchanged: it either escalates with the failure itself as new
+  input, or it stops. An
+  [infrastructure failure](#infrastructure-failures-and-process-failures-are-different-things) *is*
+  retried unchanged — and it does not violate the rule above, because what differs is the state of
+  the world rather than the work, and the attempt it repeats spent nothing on the work to begin
+  with. What keeps that honest is that the retry is bounded, backed off, and coordinated
+  fleet-wide rather than per item.
+- **Every step's cost is metered and attributed** to item and step: tokens, wall time, arena time.
+  Work that is not metered cannot be budgeted, and work that cannot be budgeted cannot be stopped.
+- **Budgets are per item and per deployment.** An item that exhausts its budget is parked for a
+  human; it is not retried harder. Quota exhaustion pauses rather than spinning against a limit.
+- **Loop detection is a first-class state.** The same step, on the same input digest, failing with
+  the same signature N times means the item is *stuck* — it stops being dispatched and is surfaced.
+  Stuck and known is a fine state; stuck and busy is precisely the failure this rule exists to
+  prevent.
+
+**Parking is not stalling.** The two invariants only appear to conflict: "never stall" forbids
+waiting on something that will never arrive *invisibly*, and parking is the opposite of that — a
+recorded state, with a stated reason, an owner, and a place it shows up in the admin UI. Deciding
+that an item cannot progress without a human, and saying so, is progress. Continuing to spend on it
+is not.
+
 ## Gate execution — Reactor's half
 
 The project declares its gates; **Reactor discovers, schedules, and executes them.** Reactor's
@@ -501,6 +730,7 @@ Reactor's design assumes these land; it does not design around their absence.
 | P4 | **Concurrent HTTP server** | `http.Server.serve` handles connections **serially** | **long-polling is impossible without it** — one runner's poll would stall the whole server |
 | P5 | **Atomic file replace + advisory locking + fsync** | `io` has no `rename`, no `flock`, no `sync` | the repo-backed stores' durability model is write-temp-then-rename; the lease ledger has concurrent writers |
 | P6 | **HTTP client essentials** | no redirects, no keep-alive/pooling, no response gzip | GitHub API access at read-index volume, under rate limits |
+| P14 | **Child-process control beyond spawn/kill/wait** | `Process.kill` sends SIGKILL only; no process groups; no way to signal or wait on a pid this process did not spawn | the runner's [watchdog](#nothing-runs-unwatched) — graceful termination, killing a process *tree*, and cleaning up a previous life's children after a restart |
 
 **P1 — TLS**, mapped through the PAL to each platform's TLS stack rather than implemented in
 Promise. Because the handshake, cipher suites, and certificate verification come from the OS, this
@@ -541,6 +771,29 @@ crash mid-write corrupts a record instead of leaving the previous version intact
 read-index makes many calls; one connection per request with no compression is not viable at that
 volume.
 
+**P14 — child-process control.** `os.Process` already gives spawn with piped stdio, `wait`, `kill`,
+and `id`, and that is enough for the *shape* of the watchdog: a goroutine blocked in `wait` sending
+the exit code down a `Channel`, selected against a timer goroutine, with the M:N scheduler making
+one watcher per child cheap. Four things are missing, each of which the
+[process discipline](#nothing-runs-unwatched) above depends on:
+
+- **A graceful signal to a child.** `kill` is SIGKILL only, so there is no term-then-kill ladder —
+  an agent gets no chance to flush state or release a lock cleanly. Signal *handling* exists
+  (`setup_signal_handling` / `receive_signal`); signal *sending* to a child does not.
+- **Process groups / job objects.** A spawn option to put the child in its own group, and a kill
+  addressed to the group, so a flow's agent and that agent's compiler die with it. Without this,
+  killing on deadline leaves grandchildren running and the arena accumulates orphans.
+- **Signalling and reaping a pid this process did not spawn** (POSIX `kill(pid, 0)` for liveness and
+  a signal by number). After a runner crash the recorded pids belong to a dead parent; today there
+  is no handle to reach them, so the restart cleanup has nothing to call.
+- **Process start time for a pid**, which is what makes `(host, pid, start time)` — the identity
+  every [lease](#every-exclusion-is-held-by-a-process-never-by-a-flag) is keyed on — checkable
+  rather than assumed.
+
+The first two are unconditional. The last two could be avoided by having the governor own child
+cleanup instead of the runner, but that pushes item-shaped knowledge into a component whose entire
+value is knowing nothing — so they are the better ask.
+
 ### Non-blocking, wanted later
 
 | # | Capability | Today | Needed for |
@@ -573,8 +826,10 @@ module in a subdirectory of a repo that is not itself a Promise module does. The
 `os` (process spawn with piped stdio, env, cwd, signals, exec, kill, wait), `io` (files,
 directories, buffered readers/writers, metadata), `json`, `time` (wall clock, monotonic `Instant`,
 `Duration`, sleep), `path`, `net` (TCP listener/stream with reactor-based goroutine parking),
-`std` (`Mutex`, `Channel`, `Task`, `select`, `` `embed ``, `Builder`, collections). These cover
-subprocess supervision, the repo-backed stores' data handling, and the concurrency model outright.
+`std` (`Mutex`, `Channel`, `Task`, `select`, `` `embed ``, `Builder`, collections). These cover the
+repo-backed stores' data handling and the concurrency model outright, and they carry the *structure*
+of subprocess supervision — spawn, watch in a goroutine, select against a deadline. Only the sharp
+edges of process control are missing, and those are P14.
 
 ## Milestones
 
@@ -599,6 +854,26 @@ subprocess supervision, the repo-backed stores' data handling, and the concurren
   Reactor and flows, not duplicated.
 - **Two objectives govern**: a clean, reusable BASE implementation that applies to many projects,
   and **running reliably unattended for prolonged periods**. See [Objectives](#objectives).
+- **Never stall, never spin.** Every wait is backed by a live process and a deadline; every attempt
+  that costs tokens or machine time must differ from the one it repeats. See
+  [Reliability](#reliability--never-stall-never-spin).
+- **Everything the runner starts is a separate process with a pid, and nothing runs unwatched.** No
+  unbounded waits, liveness read from the OS rather than from output, kill the process group rather
+  than the child, and a restart adopts nothing.
+- **Locks are leases held by `(host, pid, start time)`, never flags.** An integration lock, a
+  per-host verify lock, a worktree, an item claim — all the same primitive, all released
+  automatically when the holding process dies. More generally, every piece of persisted global state
+  is either **held** by a currently-executing process or **time-bound**; nothing persists just
+  because it was once written.
+- **Infrastructure failures and process failures are separate classes**, distinguished by whether
+  the work was ever evaluated. Infrastructure failures are never charged to the item, are handled
+  fleet-wide rather than per item, and resume at the step boundary; process failures are results and
+  are never retried unchanged. An unclassified failure is treated as a process failure, because that
+  is the mistake that stops.
+- **An absent arena is held on a long clock, then written off.** Work leases expire in minutes so
+  the fleet never waits on a machine that went away, but the arena *reservation* survives a
+  temporary absence (default 24h) before being declared lost. Anything left on a lost arena is gone,
+  a returning host is a new arena, and the write-off is recorded in the ledger.
 - **Reactor is a new project, not a migration.** No compatibility with tracker is required — on
   disk, in APIs, or in data. Moving an existing hand-built process onto it is secondary.
 - **GitHub issues = unified source of truth** (no sync world); the space can bifurcate later if

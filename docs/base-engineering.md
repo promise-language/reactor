@@ -275,8 +275,10 @@ Promise.)
    any work. In a fresh ephemeral arena the cache is cold by definition, so the arena image should
    ship or mount a warm cache — arena-provisioning work, not language work.
 2. **`promise run` must *exec* the compiled binary, not stay resident as its parent.** The runner
-   waits on the gate process and may kill it on timeout; an interposed parent turns signal delivery
-   and exit-status propagation into a wrapper problem.
+   waits on the gate process and kills it on timeout ([nothing runs
+   unwatched](design.md#nothing-runs-unwatched)); an interposed parent turns signal delivery and
+   exit-status propagation into a wrapper problem, and leaves the real gate as an orphan when the
+   deadline lands.
 3. **Stdout must belong exclusively to the gate.** Reactor parses the gate's stdout as a JSON
    envelope, so no compiler diagnostic, progress line, or cache message may ever land there —
    stderr only.

@@ -60,9 +60,11 @@ flows that each project's CI publishes:
   ephemeral cloud instances) by capability — the parallelism substrate.
 - **Unattended operation.** The system is built to *keep* running with nobody
   watching — across crashes, partitions, exhausted quotas, hung agents, and
-  rebooted machines. Interrupted runs *resume, not restart*; dead leases are
-  reclaimed; quota exhaustion pauses gracefully instead of crashing; and work
-  runs in separate processes so a failure is isolated, bounded, and killable.
+  rebooted machines. Two rules carry it: **never stall** — every wait is backed
+  by a live process and a deadline, so nothing waits on what will never arrive —
+  and **never spin** — an attempt that costs tokens or machine time must differ
+  from the one it repeats. So interrupted runs *resume, not restart*, dead leases
+  are reclaimed, and quota exhaustion pauses gracefully instead of crashing.
 - **The human, by design.** Autonomy by default with *deliberate escalation* —
   the system routes a call to a person (an ambiguous design decision, a gate that
   needs judgment, a PR to review) only when it judges the call should rise,
@@ -96,7 +98,10 @@ per-host reachability to arrange.
 
 Work runs in separate processes rather than inside the orchestrator. That is what
 makes a failure isolatable, a resource limit real, and a hung agent killable —
-the properties unattended operation actually depends on.
+the properties unattended operation actually depends on. Everything the runner
+starts is a child process it watches and bounds by a deadline; every lock, from
+an item claim to "an integration is in progress", is a lease held by a named
+process and released automatically when that process dies.
 
 ## Status
 
