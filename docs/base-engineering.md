@@ -8,6 +8,196 @@
 > contracts — how it discovers, schedules, distributes, and executes — is in
 > [design.md](design.md). The methodology behind it all is in the [white paper](../WHITEPAPER.md).
 
+## Invariants
+
+> **Status: mandatory.** Unlike the rest of this document, these are not proposals. Everything below
+> — the manifest, the gate taxonomy, the tool layout — exists to serve them. A system that satisfies
+> them by other means is fine; a system that does not satisfy them is not BASE.
+
+### 1. Origin is always green, on every platform
+
+**Nothing reaches origin that would fail the project's verify set, and a fresh clone verifies green
+on every supported platform.** Not "usually", and not "green on the platform that happened to push
+it".
+
+The reason this is an invariant rather than a quality goal is blast radius. A broken commit in origin
+does not cost one actor a rerun — it poisons every worktree branched from it, so with N resolutions
+in flight the fleet loses N, and every subsequent verify fails for reasons unrelated to the work
+being done. Recovery serializes behind one fix while everything else idles.
+
+A single pushing host can only prove its own platform, so enforcement splits by what is provable
+where:
+
+- **Same-platform verify is preventive.** It blocks `push:origin`, server-side, with no bypass —
+  see [Preconditions are enforced at the boundary](#preconditions-are-enforced-at-the-boundary).
+- **Cross-platform verify is detective, with mandatory preemption.** The matrix cannot gate a push
+  from one host at acceptable cost. That is permitted by the [materiality
+  test](design.md#where-it-is-enforced) — "prevented, *or* detected and undone" — but only if the
+  undoing actually happens, so: **trunk red on any platform holds the integration lock.** Nothing
+  else lands until it is green. That single coupling is what stops the poisoning cascade, and it
+  reuses a mechanism that already exists rather than adding one.
+
+**Prefer to make it preventive anyway, by running the matrix pre-merge on the PR.** There, latency
+hides — PRs verify in parallel while integration serializes — whereas fanning the matrix out under
+the integration lock caps trunk throughput at `1 / matrix-latency`, which for a 30-minute matrix is
+roughly 48 landings a day. Detection-plus-preemption is then the backstop for what still slips
+through, not the primary mechanism.
+
+**"Clone and verify" means from a bare clone.** Verify must depend on nothing uncommitted and on no
+warm local state for *correctness* — only for speed. That is what `preflight` is for, and a CI job
+that clones fresh and runs verify is the cheapest way to keep it true.
+
+### 2. A step's only output is commits, and the tree it leaves is clean
+
+**A flow modifies the worktree through exactly one path: it commits.** At the step boundary the tree
+is clean — no stray files, no staged-but-uncommitted work, no build output.
+
+This is not hygiene. It is what makes every other enforcement layer well-defined: the post-hoc diff
+audit has a precise subject, the next step inherits no contamination, and "what did this step do"
+has exactly one answer. The manifest's `allow_dirty_tree` already expresses this at gate
+granularity; this is the same invariant at step granularity, checked by Reactor as a step
+postcondition rather than left to the flow to honor.
+
+#### Invariants and properties are enforced differently
+
+Some things must never be in the tree at all — a committed binary, a secret, a suppression tag like
+`ignore_leaks`. Others are transiently false by nature — tests pass, the build succeeds, formatting
+is complete. Both are enforced at push. They differ in how *early* they can also be enforced, and
+the test is one line:
+
+> **Refuse early iff the violation is never legitimate in any intermediate state.**
+
+| | **Invariant** | **Property** |
+|---|---|---|
+| Evaluable on | a single write or diff | the whole tree |
+| Legitimate mid-work? | never | routinely — that is what mid-work means |
+| Examples | committed binary, secret, forbidden import, `ignore_leaks` | tests pass, build succeeds, formatted |
+| Enforced at | write · add · commit · push — all of them | reported earlier, blocking at push |
+
+Blocking a *commit* on a property would be wrong: an agent that cannot commit cannot record a floor
+to fall back to, cannot produce a bisectable history of its own attempt, and cannot leave the tree
+clean at a step boundary as invariant 2 requires. Blocking a commit on an invariant is right, and
+refusing the write that introduced it is better still.
+
+**Every such rule is declared once and enforced at many points.** Four hand-maintained copies of "no
+binaries" drift, the write-time check passes, the push rejects anyway, and the agent's early
+feedback becomes untrustworthy — at which point it stops being worth running and everything is
+discovered at the boundary again. "The sooner the agent knows, the cheaper the fix" holds only if
+the early answer is *exactly* the late verdict, never an approximation of it.
+
+### 3. Serialization is declared, and waiting for it is not work
+
+Gates are time-bound, and some must be serialized — to avoid merge conflicts, or simply to not swamp
+a machine's resources. Those two facts interact badly unless handled explicitly:
+
+> **A step declares what serializes it, and time spent waiting on a declared exclusion does not
+> count against the step's deadline.**
+
+Charging queue time to the work deadline makes a timeout a function of fleet load, so steps begin
+failing under contention — exactly when the system is busiest and a false failure costs most. The
+deadline must measure work.
+
+Three things follow, none optional:
+
+- **The declaration is static.** A step names its exclusions ahead of time, so Reactor can acquire
+  them in a canonical order. Locks discovered at acquisition time cannot be ordered, and unordered
+  acquisition of more than one lock is a deadlock waiting for load to find it.
+- **The set is transitive.** A step that runs a gate inherits that gate's exclusions — the per-host
+  verify lock, an exclusive worktree. The effective set is the step's own union everything it
+  invokes, computed rather than hand-listed, or it drifts like any other duplicated declaration.
+- **Waiting keeps its own deadline.** Excluding queue time from the work clock must not reintroduce
+  an unbounded wait, which would trade a false failure for a
+  [stall](design.md#reliability--never-stall-never-spin). Two deadlines: the work deadline the step
+  declares, and a queue deadline bounding how long it may wait to start. Exceeding the queue
+  deadline does not fail the step — it returns to the queue, recorded as contended, which is a
+  capacity signal rather than a defect.
+
+### 4. An item's work binds to an arena and carries its state forward
+
+Invariant 2 describes the step *boundary* — what the tree looks like when a step ends. It says
+nothing about the much larger body of state a resolution accumulates and that never belongs in a
+commit: the agent's on-disk session and notes, scratch files, partial downloads, a warm compile
+cache, the materialized worktree itself. That state is what makes step N+1 cheaper than starting
+over, and what makes an interrupted step resumable at all.
+
+**Capturing it is not the answer, and it is worth saying why.** The tempting design is to serialize
+progress somewhere durable and restore it onto a fresh arena. It fails three ways:
+
+- **What matters cannot be enumerated.** The relevant state is whatever the agent and its toolchain
+  happened to write. That is not knowable in advance and changes with every tool.
+- **Much of it belongs nowhere durable.** Caches and build output are large and machine-shaped, and
+  committing them is exactly what invariant 2's forbidden-content rules exist to stop.
+- **The capture would not run.** Capture is cooperative code, and the terminations that matter are
+  the non-cooperative ones — a hard kill, a crashed runner, a host that went offline. Termination is
+  often *caused by* the arena being unreachable, in which case nothing on it executes at all. A
+  recovery path that depends on cleanup having run has no answer for precisely the cases it exists
+  to handle, which is the same rule the fleet already applies to leases: [no correctness property
+  may depend on cleanup code having run](design.md#nothing-runs-unwatched).
+
+So the state does not move. The work goes to it.
+
+> **An arena is leased to an *item*, not to a step.** The lease is taken at first dispatch and held
+> across every subsequent step of that resolution, so each step inherits what the previous ones
+> accumulated. Nothing is identified, serialized, or restored, because nothing moved.
+
+What this buys is not merely convenience — it removes the requirement to *know* what needed
+preserving, which is the requirement no capture design can meet. **Interruption is then not a
+special case but the degenerate one:** a step that died mid-flight resumes on the arena that still
+holds its dirty tree, by the same rule that lets `implement` inherit `plan`'s notes.
+
+- **`item → arena` is first-class persisted state.** Dispatching a step elsewhere does not merely
+  misroute it, it silently discards the accumulated state — which is worse than refusing, and is why
+  the binding is recorded rather than inferred.
+- **Two lease clocks, already present** — distinct from invariant 3's two *deadlines*. The short
+  work lease dies with the step's process, as it should — [a runner restart adopts no
+  processes](design.md#nothing-runs-unwatched). The long arena reservation is what holds the disk
+  state, and it pins to the item rather than returning to the pool between steps.
+- **The binding is released by demand, not by a clock.** An idle arena costs nothing while the pool
+  has spare capacity, and breaking a binding always costs something — the transient state is gone.
+  Those are not symmetric, so a healthy binding has no expiry: it is reclaimed when capacity is
+  genuinely short, and otherwise left alone however long the item sits. The one clock that does
+  exist covers a different situation — an arena that has become *unreachable* while its item wants
+  to run, where waiting indefinitely would be a stall rather than a saving.
+
+#### A step may declare that it does not want the inheritance
+
+Carrying state forward is the default, not an obligation, and two different relaxations are worth
+separating because they cost different things:
+
+| Declaration | Effect | Why a step asks for it |
+|---|---|---|
+| **Fresh session** | the agent is launched with no inherited notes or context; the tree and caches are untouched | the step's judgment must not be contaminated by the reasoning that produced the work |
+| **Arena-independent** | may be dispatched to any eligible arena, rather than waiting for the bound one | the step needs nothing but the tree and the item, so binding it wastes capacity |
+
+They are orthogonal: the first constrains what the agent *knows*, the second what the scheduler may
+*do*. `inspect` declares both — its judgment must be independent, and since it inherits nothing
+there is no reason to hold it to one machine. The first is the one that matters. **An inspection
+that inherits the implementer's session is not an independent check — it is the same reasoning
+grading its own output**, which is precisely the property "untrusted work is
+[bracketed by trusted gates](#single-issue-work-first-class-prs)" depends on. So this is an
+integrity declaration first and a scheduling hint second.
+
+**Shared transient state is an information channel between steps, and it crosses trust boundaries.**
+Step grants isolate what a step may *do*; a shared arena creates a path for what it *knows*. Notes
+left by a step run under a low-trust role are read by whatever runs next, so a review or security
+step inheriting them is taking input from the thing it is reviewing. **Where two consecutive steps
+differ in trust level, a fresh session is mandatory rather than optional** — and like the rest of
+the step's grants, the declaration lives in the companion repo, out of reach of the agents it
+constrains.
+
+**Commits are the floor, not the mechanism.** If the arena vanishes, the transient state goes with
+it and the item restarts its current step from the last commit. That is the accepted loss: rarer
+than routine interruption, and far cheaper than a capture mechanism that cannot be relied on in the
+cases that matter. The two paths differ in kind — **a resume with its arena intact is not a
+repeat**, because it starts with the partial tree and the agent's own notes; a from-scratch restart
+after arena loss is, and is subject to the ordinary
+[loop-detection](design.md#reliability--never-stall-never-spin) rule.
+
+**What survives is what was on disk.** A dead agent's in-memory context is gone regardless; what
+carries forward is the tree and whatever the agent and its tools wrote down. That is an argument for
+agents that externalize their state as they work, and it is not a property the fleet can enforce for
+them.
+
 ## Two layers, often confused
 
 Keeping these apart is the point of this doc:
@@ -17,7 +207,7 @@ Keeping these apart is the point of this doc:
 | What | Reusable, domain-agnostic machinery: the flow common library, the gate SDK, the manifest and envelope contracts, ratcheting baselines, the dev-tooling conventions | One project's *concrete* step composition, item types, prompts, gates, metrics, thresholds, and schedules |
 | Owned by | the BASE layer itself — shared across every adopting project | the project |
 | Example | step execution, push leases, wire types, "a gate declares metrics with a direction and a mode" | "`promise-tests` emits `test_failures`, enforced, cap 0"; the `implement` prompt template |
-| Lives in | a shared repo (see below) | outside the project source — today `workspace/projects/<project>/` |
+| Lives in | a shared repo (see below) | split — gates in the project repo, everything else outside it (today `workspace/projects/<project>/`); see [What lives where](#what-lives-where) |
 
 The flow split is the clearest instance: ~6.8k lines of common library against ~770 lines of
 per-project definition. Note that "project-specific" does **not** mean "lives in the project repo" —
@@ -43,6 +233,9 @@ consumes these contracts is [design.md](design.md). Three separate things.
 | **Per-project flow definitions** — step composition, item types, prompts | **a companion BASE repo, one per project** | project-specific, but must not live in the project tree |
 | **Per-project authority config** — roles, step grants, schedules | **the same companion repo** | must be unreachable by the agents it constrains |
 | Gate implementations + baselines | **the project repo** | a gate measures the tree, so it comes from the tree |
+| **Agent bounds** — the guard hook, tool allowlists, the MCP mount list | **the companion repo**, applied by the arena | authority; must be unreachable by the agents it constrains |
+| **Capability-granting MCP servers** — shell, network, database | **the arena image** | capability comes from the environment, never from the tree |
+| **Tree-knowledge MCP servers** — compiler introspection, symbol lookup | **the project repo**, read-only | describes the tree, so it comes from the tree |
 | Project source | **the project repo** | |
 
 **Today, `workspace` holds three of those rows at once** — the flow common library (`doflow/`,
@@ -80,6 +273,39 @@ and the flow common library, and Reactor needing configuration to find each proj
 The pinning is ordinary Promise remote-module resolution, and each companion repo carries
 `promise.toml` at its root — so this layout needs no new language feature
 ([P12](design.md#platform-requirements--requested-of-promise) becomes unnecessary for flows).
+
+### Bounds are authority, not tooling
+
+The same reasoning disposes of a category the forge blueprint quietly misfiles. **`bin/guard` — the
+hook that runs on every agent tool call — is a grant enforcer, so it belongs with authority, not in
+the project's `bin/`.** The excuse that saves gates does not save it: a weakened gate is caught by
+review before it can authorize anything, but a guard weakened at step N authorizes step N+1
+*immediately*, before any review exists. That is the "self-authorizing bound" failure verbatim.
+
+So guard's rules come from the companion repo and are applied by the arena when it launches the
+agent harness. The same goes for the harness's tool allowlist and its MCP mount list: if that
+configuration lives in the project tree, an `implement` step edits it and mounts itself a new
+server.
+
+**MCP servers split by what they do rather than by what they are.** A server that grants reach —
+shell, network, a database — is capability, and per [One binary per
+project](#one-binary-per-project) capability comes from the environment: the arena provisions it,
+the companion repo grants it per tool. A server that only exposes knowledge *about* the tree —
+compiler introspection, symbol lookup — is gate-shaped and legitimately comes from the tree. Which
+gives one rule that disposes of the whole category:
+
+> **A tree-provided MCP server may only ever be granted read.** If it needs write, it is not a
+> knowledge server, and it cannot come from the tree.
+
+**A network-reaching MCP server collides with the [outbound-to-Reactor-only
+invariant](design.md#deployment-topology--server-governor-runner)** — the property that lets an
+arena run with tightly restricted egress
+and one trust path to verify. The consistent resolution is the one already used for flow delivery:
+the server runs outside the arena and is **proxied through Reactor**, which mirrors rather than
+redirects. Same invariant, same single trust path, and the proxy is the natural place to enforce the
+per-tool grant and log the calls — which supplies the post-hoc audit layer on the one resource where
+prevention is hardest. See [the capability
+vocabulary](design.md#open--the-capability-vocabulary) for how the grant is expressed.
 
 ### Visibility is a constraint, not a detail
 
@@ -157,10 +383,59 @@ generated `promise-lang.org/base` page.
 
 ## Dev tooling
 
-How a project builds and runs its own tools is part of this layer. The Go
-[forge](https://github.com/promise-language/forge) blueprint (`./make` → `bin/`, source-hash
-staleness checks, committed trampolines) is what BASE uses today; most of that machinery exists
-only to work around `go run`, and stops being necessary once tools are written in Promise. See
+"The tools" is one word for four different things with four different owners, and conflating them is
+what makes "who writes `bin/verify`?" sound harder than it is. They separate by **what each does to
+the boundary**:
+
+| | Examples | What it does | Comes from | Prescribed by |
+|---|---|---|---|---|
+| **Gates** | tests, vet, coverage | *measures* the tree | the tree | BASE prescribes the **contract**, never the roster |
+| **Dev tools** | format, build, a fixer | *edits or checks* the tree for a human or an agent | the tree | nobody — project convention |
+| **Bounds** | guard, pre-commit, tool allowlists | *constrains* the agent | the companion repo | BASE, mandatorily |
+| **Capabilities** | MCP servers, shell, egress | *grants* the agent reach | the arena | BASE, mandatorily |
+
+The first two rows are the project's business and the last two are authority — see [Bounds are
+authority, not tooling](#bounds-are-authority-not-tooling).
+
+### What BASE actually requires of a project
+
+**Exactly one thing: a command that enumerates the project's gates.** By convention `bin/gate list
+--json`, emitting [the manifest](#gate-discovery--the-project-declares-reactor-discovers), plus the
+JSON envelope each gate writes. That is the entire mandatory surface.
+
+BASE deliberately never names `bin/format` or `bin/vet`, and it must not: [the polyglot
+boundary](#language) means a Rust project satisfies the same contract with `cargo fmt` and `cargo
+clippy` and no `bin/` at all. **The manifest is the indirection that makes the roster private to the
+project.** So the answer to "who prescribes the layout of the tools" is that nobody does, by design —
+what BASE prescribes is that a project can *enumerate* whatever layout it has.
+
+### Who writes them
+
+Three layers, and only the middle one is negotiable:
+
+1. **The contract** — manifest, envelope, guard protocol, capability grants. BASE's, mandatory,
+   language-neutral, tiny.
+2. **A blueprint supplying a default roster** — BASE's, *optional and opinionated*. This is what the
+   Go [forge](https://github.com/promise-language/forge) blueprint is, and what
+   [promise-forge.md](promise-forge.md) is its successor to. It is where `verify` / `format` / `vet`
+   / `test` / `guard` legitimately exist **as names**: a scaffold a new project starts from. A
+   project that ignores it and prints its own JSON is equally compliant. Forge reads as normative
+   today and is not.
+3. **The implementations** — the project's. For a project run under BASE the honest answer to "who
+   creates them" is that **the bootstrap is human and the rest is backlog**: somebody hand-writes
+   the manifest command and one gate, after which "add a `vet` gate" is an ordinary work item an
+   `implement` step resolves.
+
+Two of those names come off the project's list entirely: `verify` is [derived from the
+manifest](#verify-is-derived-not-declared) and ships in the gate SDK, and `guard` is
+[authority](#bounds-are-authority-not-tooling) and comes from the companion repo. What a project
+actually authors is gates, fixers, and whatever dev tools it wants for itself.
+
+### How they are built
+
+Go's [forge](https://github.com/promise-language/forge) blueprint (`./make` → `bin/`, source-hash
+staleness checks, committed trampolines) is what BASE uses today; most of that machinery exists only
+to work around `go run`, and stops being necessary once tools are written in Promise. See
 [promise-forge.md](promise-forge.md).
 
 ## The principle
@@ -332,7 +607,7 @@ Untrusted work is **bracketed by trusted gates**: a less-trusted role runs every
 pushing to origin (it produces a PR), and a trusted review either merges it, returns it to sender,
 or escalates to the human at the top of the trust ladder.
 
-## Gate discovery — the project declares, Reactor schedules
+## Gate discovery — the project declares, Reactor discovers
 
 Tracker required each gate to be entered by hand into server config (name, command, schedule, host
 filter, metric directions, ratchet caps). That doesn't scale to a multi-project Reactor and forces
@@ -342,6 +617,93 @@ project declares its gates; Reactor discovers them.**
 **The contract.** A project exposes a single command — convention: `bin/gate list --json` — that
 emits a manifest describing every gate it offers plus a global preflight command. The manifest is
 the source of truth for gate *identity*, *runtime*, *eligibility*, and *metric semantics*.
+
+### Preconditions and monitors are different things
+
+The manifest as originally drafted could only describe **monitors**. Its `schedule` vocabulary —
+`every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual` — is entirely retrospective;
+`after-every-commit` says *after*, measuring a commit that already exists. There was no way to
+express "this transition does not happen unless this is green", which is the only thing verify is.
+
+The two kinds differ in nearly every property:
+
+| | **Precondition** | **Monitor** |
+|---|---|---|
+| When | before a transition | on a schedule |
+| Failure means | the transition is refused | a bug is filed, the baseline ratchets |
+| Consumed by | the step attempting the transition | Reactor's scheduler and ledger |
+| Latency | on the critical path | irrelevant |
+| Metrics | compared against the baseline; never move it | compared, and ratchet the baseline on success |
+| Host | must be the host doing the transition | any eligible arena |
+
+**Ratcheting is a monitor act, not a precondition one.** Both read the baseline — a precondition
+that ignored it could not catch a coverage or test-count regression, which is exactly what it is
+for — but only a run against *landed* trunk may move it. A candidate tree that has not landed must
+not raise the bar for everyone else, and a rejected one must not lower it. That asymmetry is the
+sign these were never one thing.
+
+So a gate gains a `blocks` field, orthogonal to `schedule` — a gate may do both, blocking a push
+*and* running every four hours to catch flakiness and environmental drift. **`blocks` values are
+drawn from the [VCS capability vocabulary](design.md#open--the-capability-vocabulary)**
+(`commit`, `push:branch`, `push:origin`, `pr.create`, `pr.merge`) rather than a parallel set of
+transition names, so "which gates block this action" is a lookup keyed on the same strings the
+grants are written in.
+
+**Once preconditions hold, monitors have a narrow job.** If `push:origin` is blocked on green, trunk
+is green by construction, and the scheduled set exists only for what preconditions structurally
+cannot catch: cross-platform, long-running, flaky-under-load, and dependency rot that changes with
+no commit at all. That is a real job, but a small one — the opposite of how a schedule-first manifest
+presents it.
+
+#### Preconditions are enforced at the boundary
+
+A precondition is checked at up to three places, and only the last of them is authority:
+
+1. **Any step, advisorily.** A step may run a transition's gate set early to learn its fate. This
+   refuses nothing — see [Commit-time verify is a
+   prediction](#commit-time-verify-is-a-prediction-not-a-gate).
+2. **Reactor, before dispatching the transition step.** It runs the gates naming that transition in
+   `blocks` and does not proceed if they fail. This is the ordinary path, and the one that turns a
+   failed precondition into a recorded step outcome rather than a rejected push.
+3. **The code host, unconditionally.** Branch protection refuses the push whatever ran anywhere
+   else.
+
+Layer 3 is what makes the invariant material, because a local git hook is bypassable — an agent that
+can run `git` can run `git --no-verify`. So **a precondition enforced only by a local hook is
+advisory**, and by the [materiality test](design.md#where-it-is-enforced) must be labelled as such.
+Layers 1 and 2 exist for speed and attribution, not authority.
+
+Whatever runs at layers 1 and 2 must be the gates the manifest declares, never a hand-kept list, or
+the early answer stops matching the late verdict — see
+[invariant 2](#invariants-and-properties-are-enforced-differently).
+
+**`blocks: ["commit"]` is for invariants, not properties.** Refusing a commit is right when the gate
+checks something never permissible in any intermediate state — a committed binary, a secret, a
+suppression tag. Blocking a commit on a whole-tree property is the mistake invariant 2 rules out.
+
+#### Commit-time verify is a prediction, not a gate
+
+`push:origin` is the enforcement boundary; committing broken work is legitimate, because a commit is
+how an agent records a floor to fall back to. But a commit that fails verify is *doomed* — it will
+be rejected at push — and saying so early is worth doing.
+
+That is a prediction, and it is reliable for exactly one reason: **it is literally the same gate set,
+not a lighter approximation of it.** A cheaper commit-time list would be a heuristic, and a heuristic
+that says "you're fine" when the push will reject is worse than running nothing, because it converts
+a known cost into a surprise. This needs no manifest vocabulary at all — any step may run the
+push-blocking set at any point to learn its fate.
+
+Running it early buys more than wall-clock. At commit time the failure is unambiguously the agent's
+own; after `integrate` has rebased onto a moved trunk, the same failure may belong to the interaction
+with someone else's landed change. Those are different remediation problems with different owners,
+and verifying before integrating is what keeps them distinguishable.
+
+**Scope, which must be stated rather than assumed.** "A commit that fails verify is rejected later"
+is true under *every-commit-green* semantics, but a push verifies a **branch**, and a later commit
+can fix an earlier one. Bisect is how a monitor's finding gets localized, and bisect over a history
+with broken intermediates returns noise — so every-commit-green is worth wanting here specifically.
+It need not be paid for: **squash on `integrate`** makes the pushed range a single commit, at which
+point head-only and every-commit are the same thing and the question stops existing.
 
 ### Manifest shape (v1, JSON)
 
@@ -363,7 +725,9 @@ the source of truth for gate *identity*, *runtime*, *eligibility*, and *metric s
       "host_os":         ["linux", "darwin", "windows"],
       "host_arch":       ["amd64", "arm64"],
       "timeout":         "30m",
+      "blocks":          ["push:origin"],
       "schedule":        "every 4h",
+      "serialized_by":   ["host:cpu"],
       "allow_dirty_tree": false,
       "tags":            ["tests", "host"],
       "metrics": [
@@ -371,6 +735,18 @@ the source of truth for gate *identity*, *runtime*, *eligibility*, and *metric s
         { "name": "test_failures", "type": "int", "direction": "down", "mode": "enforced",      "cap": 0     },
         { "name": "leak_count",    "type": "int", "direction": "down", "mode": "enforced",      "cap": 0     },
         { "name": "excluded_count","type": "int", "direction": "down", "mode": "informational"               }
+      ]
+    },
+    {
+      "name":            "promise-format",
+      "command":         "bin/gate format",
+      "fix":             "bin/format",
+      "host_os":         ["any"],
+      "timeout":         "2m",
+      "blocks":          ["push:origin"],
+      "tags":            ["format"],
+      "metrics": [
+        { "name": "unformatted_files", "type": "int", "direction": "down", "mode": "enforced", "cap": 0 }
       ]
     }
   ]
@@ -383,17 +759,24 @@ the source of truth for gate *identity*, *runtime*, *eligibility*, and *metric s
 | `preflight` | Optional global setup command Reactor runs after a fresh checkout, before any gate (build the gate binary itself, sync submodules, sanity-check the tree). OS-dispatched. |
 | `gates[].name` | Stable id; keys metric history and baselines. **Must be unique within the manifest.** |
 | `gates[].command` | Exec line. OS-dispatched. |
+| `gates[].fix` | Optional deterministic remediation command. OS-dispatched. **Never run by the gate runner** — see [The check/fix pair](#the-checkfix-pair). |
 | `gates[].host_os` | `linux` / `darwin` / `windows` / `any`. Eligibility filter. |
 | `gates[].host_arch` | Optional `amd64` / `arm64` filter — lets a project target "linux arm64" separately from "linux amd64" without a target-triple grammar. Omitted ≡ any. |
-| `gates[].timeout` | Duration (`30m`, `2h`). |
-| `gates[].schedule` | `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. |
+| `gates[].timeout` | Duration (`30m`, `2h`). Bounds *work*, not queue wait — [invariant 3](#3-serialization-is-declared-and-waiting-for-it-is-not-work). |
+| `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#open--the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
+| `gates[].schedule` | Monitor cadence: `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. Omitted ≡ never scheduled (a pure precondition). |
+| `gates[].serialized_by` | Named exclusions this gate needs. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
 | `gates[].allow_dirty_tree` | Skip the post-run clean-tree check. |
-| `gates[].tags` | Free-form; attached to auto-filed bugs. |
+| `gates[].tags` | Free-form; attached to auto-filed bugs. Also the selector for verify subsets (`verify --tags wasm`). |
 | `gates[].metrics[]` | One spec per metric the gate emits. |
 
-**OS-dispatched commands.** `preflight` and `gates[].command` each accept either a **string** (used
-on every OS) or an **object** `{ "default": …, "linux": …, "darwin": …, "windows": … }` — the
-host-OS key wins, `default` is the fallback. OS keys use the same vocabulary as `host_os`. A bare
+**A gate must declare `blocks`, `schedule`, or both.** One that declares neither can never run, and
+the manifest validator should reject it rather than let it sit inert.
+
+**OS-dispatched commands.** `preflight`, `gates[].command`, and `gates[].fix` each accept either a
+**string** (used on every OS) or an **object**
+`{ "default": …, "linux": …, "darwin": …, "windows": … }` — the host-OS key wins, `default` is the
+fallback. OS keys use the same vocabulary as `host_os`. A bare
 string is shorthand for `{ "default": … }`.
 
 **Metric spec** — `{name, type, direction, mode, cap?}`:
@@ -406,6 +789,62 @@ string is shorthand for `{ "default": … }`.
 - `cap` (optional): a direction-aware ceiling or floor at which baseline auto-ratcheting stops.
   Prevents a one-time fluke — coverage spiking on a partial run, say — from making every future run
   "regress". `up` → baseline ≤ cap; `down` → baseline ≥ cap.
+
+### The check/fix pair
+
+Some gates have a deterministic remediation sitting three feet away — formatting is the obvious
+case — and a manifest that models checkers only cannot say so. The consequence is concrete: when a
+format gate fails, the flow's sole remedy is *ask the model to fix it*, which is expensive,
+nondeterministic, and prone to producing near-miss formatting that fails the same gate again. That
+cost lands on the critical path, where it is least affordable.
+
+Hence `fix`, with a contract the project must uphold:
+
+> **`fix` is idempotent, touches only what `command` would flag, and `fix` followed by `command`
+> passes.**
+
+BASE cannot prove that, but it can *test* it — a meta-gate that dirties the tree, runs `fix`, and
+asserts the checker goes green catches the two-implementations drift this exists to prevent.
+
+**The stronger form, where the gate admits it: define the checker as the fixer's dry run** —
+`check ≡ (fix produces no diff)`, the `gofmt -l` shape. Divergence then becomes structurally
+impossible rather than merely discouraged. That only works where failure is expressible as a diff,
+so formatting yes, vet and tests no; paired declaration is the general fallback.
+
+**The gate runner never invokes `fix`; the flow does.** The manifest only declares *where* the fixer
+is. That placement looks like it strains [the principle](#the-principle) — the fixer comes from the
+tree, and it *modifies* the tree — so it is worth being precise about why it does not. The principle
+constrains **resolution logic**, which must live outside the worktree because fixing it mid-flight
+would contend with the work in flight. A fixer is not resolution logic; it is a tool the flow
+invokes, exactly as it invokes the compiler, and what it does is defined by the tree's own
+configuration. Deciding *when* to run it stays outside, with the flow.
+
+### verify is derived, not declared
+
+**`verify` is not an entry in the manifest. It is a client of it.**
+
+Declaring it as a gate would break two ways at once: its metrics would collide with the child gates'
+— `test_failures` counted twice, history muddled — and the project would maintain two lists, what
+verify runs and what actually blocks the push. Those lists drifting *is* the late-rejection failure.
+Verify comes back green, the push is refused by a gate verify did not know about.
+
+Derive it instead, per transition:
+
+- `verify` ≡ run the gates declaring `blocks: ["push:origin"]`, eligible on this host
+- pre-merge ≡ the gates declaring `blocks: ["pr.merge"]` — where the cross-platform matrix lives,
+  since it cannot block a push from a single host
+
+The local check and the rejecting check are then the same command line by construction, because both
+are read out of one declaration. Sameness stops being a discipline the project maintains and becomes
+a property of there being one source — which is the same shape as the check/fix pair above and as
+[declare once, enforce at many points](#invariants-and-properties-are-enforced-differently).
+
+It also dissolves the composite question. Verify needing to be vet + format + tests is not a new
+gate *kind*; it is a selector over the existing set, and `verify --wasm` is a `tags` selector.
+
+**Consequence for ownership: a derived verify is identical code for every project**, so it ships in
+the gate SDK and nobody authors it per project. Projects author gates and fixers; the runner over
+them is BASE's.
 
 ### Gate output envelope
 
@@ -426,7 +865,9 @@ The authoritative schema belongs alongside the gate SDK.
    gates adopt with defaults. Removed gates retire — history preserved, scheduling stopped. Changed
    `direction` or `type` is flagged for admin review, because changing metric semantics mid-history
    would silently invalidate every baseline behind it.
-3. **Execute.** Reactor's scheduler picks eligible gates by host OS × arch × deployment overrides,
+3. **Execute.** For monitors, Reactor's scheduler picks eligible gates by host OS × arch ×
+   deployment overrides; for preconditions, the transition being attempted selects them via
+   `blocks`. Either way Reactor acquires the gate's `serialized_by` exclusions in canonical order,
    runs `preflight` if the worktree is fresh, runs the gate command, parses the envelope, and
    writes results to its ledger.
 

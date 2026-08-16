@@ -263,6 +263,36 @@ still to nail down. A starting proposal, to be argued with:
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
 | Deployment | config.read · config.write · secret:`<name>` |
+| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write · model.quota |
+
+**The tool-surface row is not optional decoration.** Everything an agent reaches through its harness
+is reach that `role ∩ step` cannot describe if it is unnamed, and an MCP server is the clearest
+case: it can grant filesystem write, network egress, or database access without touching a single
+other row in this table. The choke point already exists — [tool
+availability](#where-it-is-enforced), never expose the tool at all — and it is the strong kind, in
+the same class as credential scoping, because you cannot call a tool that is not in your list. What
+was missing is the declaration, not the mechanism.
+
+Naming it gives the static capability check below an operational form: at dispatch, Reactor
+verifies *mounted tool set ⊆ step grant* and refuses to launch the session otherwise. A `plan` step
+that would come up with a filesystem-writing server attached fails before the agent starts rather
+than after it writes something.
+
+**MCP breaks an assumption every other row makes.** The rest of this vocabulary is closed —
+Reactor defines it. MCP tools are declared by the server at runtime, and that difference is
+load-bearing:
+
+- **Grants are allowlists against a pinned server, never denylists.** With a floating server, an
+  upstream release that adds `execute_sql` silently widens every step that mounts it — a
+  supply-chain-shaped widening no diff in either repo would show. Pin version and hash; an unknown
+  tool is not exposed. Fails closed.
+- **Read versus write cannot be inferred.** `search_files` reads and `create_file` writes, but a
+  single `run_query` does either depending on its argument, and the tool schema will not say. The
+  classification is **declared by whoever mounts the server**, not derived from the server's own
+  metadata, and anything unclassified is write.
+
+Where the servers come from, and why a tree-provided one may only ever be granted read, is in
+[base-engineering.md](base-engineering.md#bounds-are-authority-not-tooling).
 
 Questions this has to answer before it is settled: whether `annotate:<kind>` is the right
 granularity or item fields need per-field grants; whether tree write should be path-scoped (a step
@@ -558,6 +588,40 @@ instead of execution: a wait is backed by a pid, and so is a lock. A deployment 
 process wedges the whole fleet behind a stuck integration lock is exactly the unattended failure
 objective 2 exists to rule out.
 
+#### Exclusions are declared, and waiting for one is not work
+
+The lease model above says how a lock is *held*. It does not say who asks for one, or what the clock
+does while they wait — and both matter, because a step is time-bound and an exclusion is by
+definition contended. This is [invariant
+3](base-engineering.md#3-serialization-is-declared-and-waiting-for-it-is-not-work); Reactor's half
+of it is three mechanisms.
+
+> **Every step and every gate declares its exclusions statically. Queue time is charged to a
+> separate clock from work time.**
+
+- **Two deadlines, not one** (distinct from the two *lease* clocks
+  [below](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)). The declared `timeout` bounds
+  *work*; a separate **queue deadline** bounds how long a step may wait to start. Charging queue
+  time to the work deadline makes a timeout a function of fleet load, so steps begin failing under
+  contention — precisely when the system is busiest and a false failure is most expensive. Exceeding
+  the queue deadline does not fail the step: it returns to the queue, recorded as **contended**,
+  which is a capacity signal rather than a defect. Two deadlines are also what keeps this from
+  reintroducing the unbounded wait that [never stall](#reliability--never-stall-never-spin) forbids
+  — excluding queue time from one is safe only because the other is still running.
+- **Static declaration, canonical acquisition order.** Because the set is known before dispatch,
+  Reactor acquires in a total order over lock names and can reject an unsatisfiable set up front.
+  Locks discovered at acquisition time cannot be ordered, and unordered acquisition of more than one
+  lock is a deadlock that waits for load to find it. This is the same shape as the static
+  role-versus-flow check: declared data admits a check that runtime discovery does not.
+- **The set is transitive and computed.** A step that runs a gate inherits that gate's
+  `serialized_by` — the per-host verify lock, an exclusive worktree, a resource cap like `host:cpu`.
+  The effective set is the step's own union everything it invokes, derived from the manifest rather
+  than hand-listed on the step, or the two declarations drift and the ordering guarantee is lost.
+
+**Waiting is still a watched state.** A step blocked on an exclusion has a live process and a
+registry entry like any other; "waiting for the integration lock" traces to a pid and a queue
+deadline, never to a belief. What changes is only which clock is charged.
+
 #### A host that is merely off is not a host that is gone
 
 One expiry cannot serve both cases. A runner that vanishes mid-step is blocking the fleet *now*; an
@@ -569,22 +633,37 @@ orders of magnitude:
 | | Renewed | Expires in | On expiry |
 |---|---|---|---|
 | **Work leases** — item claims, the integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
-| **Arena reservation** — the arena's identity, provisioned state, and assignment to a project | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
+| **Arena reservation** — the arena's identity, provisioned state, and assignment to a project and, from first dispatch, to an item | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
 
 **Work never waits on a returning host.** The moment a runner stops renewing, everything it was
 holding is reclaimed and its items are dispatchable again — the long clock applies only to the
 *reservation*, never to the work. Otherwise the second clock would reintroduce exactly the stall the
 first one exists to prevent.
 
+**One bounded exception: an item whose [bound arena](#an-arena-is-leased-to-an-item-not-to-a-step)
+has stopped responding while it has work to do.** Its accumulated state lives on that arena, so
+dispatching it elsewhere does not rescue the work — it silently discards it. Such an item waits, on
+a **third lease clock, much shorter than the reservation**: on expiry the binding drops, the transient
+state is written off, and the item is dispatchable anywhere from its last commit. This clock exists
+only for unreachability — an item merely *idle* on a healthy arena is not waiting on anything and is
+never evicted by time. Holding an item for a day to save twenty minutes of agent work is the wrong
+trade, and the number should say so. This is a wait, not a stall, by the same test as
+[parking](#every-attempt-must-make-progress) — bounded, recorded, and with a stated reason — but it
+is the one place where work waits on a host at all, so it is called out rather than left implicit.
+A step declared *arena-independent* is not subject to it and dispatches immediately elsewhere.
+
 **What "declared lost" means is deliberate.** Not "offline", not "degraded" — the reservation is
 force-dropped, the capacity returns to the pool, and an ephemeral arena is reaped at its provider.
 The state on it is written off, not awaited.
 
 - **Anything on a lost arena is gone.** Uncommitted worktree state, local caches, partial artifacts,
-  output that was never streamed. There is no "it might come back with the work still in it" —
-  everything that matters must already have been streamed to the server or committed, and treating
-  the arena as a possible source of truth later is what turns a temporary absence into permanent
-  corruption.
+  output that was never streamed. There is no "it might come back with the work still in it", and
+  treating the arena as a possible source of truth later is what turns a temporary absence into
+  permanent corruption. **Arena-held state is an optimization, never authority**: it makes the next
+  step cheaper and an interruption survivable — see [an arena is leased to an
+  item](#an-arena-is-leased-to-an-item-not-to-a-step) — but every fact a correctness decision rests
+  on must already have been streamed to the server or committed. Losing an arena therefore costs
+  work, never truth, and that is what makes the write-off safe rather than merely unavoidable.
 - **A host that reappears after being declared lost is a new arena.** It re-registers, reprovisions
   from scratch, and resumes nothing. Any lock it believes it holds already belongs to somebody else,
   so it must re-acquire before touching anything — a returning runner that trusted its own memory
@@ -598,6 +677,62 @@ The state on it is written off, not awaited.
   [ConfigStore](#configstore--the-deployment-owners-residual) with the rest of arena allocation. A
   CI arena farm may want thirty minutes; a fleet of developer laptops wants to survive a long
   weekend.
+
+#### An arena is leased to an item, not to a step
+
+"Anything on a lost arena is gone" is the right rule for an arena that is *lost*. Applied between
+steps, it would throw away the state that makes a resolution cheaper as it proceeds — the agent's
+on-disk session and notes, scratch files, a warm cache, the materialized worktree — and would make
+an interrupted step unrecoverable, since re-running it from its starting commit can do nothing the
+first attempt could not. That write-off does not merely lose work; it **spins**.
+
+None of that state can be reliably captured and moved — see [invariant
+4](base-engineering.md#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward), whose
+decisive argument is that capture is cooperative code while the terminations that matter are the
+ones where no code on that host runs at all. So the state stays put and the work goes to it:
+**Reactor binds an item to an arena at first dispatch and keeps the binding for the whole
+resolution.** Interruption is the degenerate case of that rule, not a mechanism of its own.
+
+Reactor's half is four obligations:
+
+- **`item → arena` is first-class persisted state.** The scheduler dispatches the item's steps to
+  that arena; dispatching elsewhere silently discards accumulated state, which is worse than
+  refusing outright.
+- **The reservation pins to the item rather than returning to the pool between steps.** This is the
+  [reservation clock](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) already in the model,
+  reassigned rather than released — the *work* lease still dies with each step's process, so
+  [nothing runs unwatched](#nothing-runs-unwatched) is untouched and every step is an ordinary new
+  child watched like any other.
+- **Step declarations can relax the binding, and Reactor must honor both forms.** A step declaring
+  *arena-independent* may be dispatched anywhere, freeing capacity; a step declaring *fresh session*
+  runs on the bound arena but is launched with no inherited agent context. The second is an
+  integrity requirement where consecutive steps differ in trust — see [invariant
+  4](base-engineering.md#a-step-may-declare-that-it-does-not-want-the-inheritance) — so it is
+  enforced at launch, not requested of the agent.
+- **The binding is released by demand, not by a clock.** An idle arena costs nothing while the pool
+  has spare capacity, and breaking a binding always costs something — the transient state is gone
+  and the next step starts from the last commit. Those are not symmetric, so a healthy binding gets
+  **no expiry timer**: it is reclaimed when the pool is genuinely short and otherwise left alone,
+  however long the item sits. Under pressure, prefer victims whose item has no step in progress,
+  then least-recently-used, and record the reclamation like any other.
+
+**The binding is revocable, not a lock.** While it stands the scheduler honors it — that is the
+point of recording it — but the server may drop it at any moment, and dropping it is an explicit,
+recorded act with a reason (capacity pressure, or the unreachability clock above), never a silent
+reroute. Revocability is also what keeps the binding from becoming the orphaned state [every piece
+of persisted state is held or timed](#every-exclusion-is-held-by-a-process-never-by-a-flag) exists
+to forbid: an entry the server may unilaterally clear needs no expiry to avoid outliving its
+purpose, which is how it can have no timer without becoming the third form that rule denies.
+
+**A runner restart adopts no processes, but disk is not a process.** The restart rule kills recorded
+pids, fails their steps, and releases their *work* leases — it does not erase the worktree, and it
+must not drop the arena's binding to the item either. Those are different lifetimes on the same
+host, and conflating them turns a survivable interruption into a write-off.
+
+**When the arena really is lost, the item restarts its current step from the last commit.** That is
+the accepted floor and the reason commits still matter, but it is a different event from a resume —
+one starts with the partial tree and the agent's notes, the other with neither — and the ledger must
+distinguish them, because only the second is a repeat.
 
 ### Infrastructure failures and process failures are different things
 
@@ -680,6 +815,14 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   the same signature N times means the item is *stuck* — it stops being dispatched and is surfaced.
   Stuck and known is a fine state; stuck and busy is precisely the failure this rule exists to
   prevent.
+- **A resume is not a retry, and the counter must know the difference.** A step
+  [resuming on its bound arena](#an-arena-is-leased-to-an-item-not-to-a-step) starts from the
+  partial tree and the agent's own notes, so it can do what the interrupted attempt could not and
+  does not count toward the rule above. A restart from the last commit after the arena was lost
+  starts from nothing extra, and does. Counting both as "attempt N+1" is how a system ends up parking
+  work that was progressing or re-running work that never will. **Repeated interruption is still a
+  signal, just not about the item** — a step killed and resumed many times on one arena indicts the
+  arena, and belongs in the same health accounting as accumulated write-offs.
 
 **Parking is not stalling.** The two invariants only appear to conflict: "never stall" forbids
 waiting on something that will never arrive *invisibly*, and parking is the opposite of that — a
@@ -697,8 +840,10 @@ responsibilities end at the manifest boundary:
    keyed by name. Re-run on new commits and on a slow refresh tick; new gates adopt with defaults,
    removed gates retire (history preserved), and changed metric semantics flag for admin review
    rather than silently invalidating baselines.
-2. **Schedule.** Pick eligible gates per host OS × arch × deployment overrides, honoring each
-   gate's declared cadence.
+2. **Schedule.** Two invocation modes, not one. **Monitors** are picked per host OS × arch ×
+   deployment overrides, honoring each gate's declared cadence. **Preconditions** are not scheduled
+   at all — they are selected by the transition being attempted (`blocks`) and run on the host
+   attempting it. A gate may be both.
 3. **Execute.** Run the declared preflight on a fresh worktree, then the gate command as a
    subprocess, parse the JSON output envelope from stdout, and write results to `LedgerStore`.
 4. **Retain deployment-side config**, keyed by `(project, gate_name)` and layered *on top of* the
@@ -710,6 +855,13 @@ responsibilities end at the manifest boundary:
 **Layering rule: the manifest defines the contract; deployment overrides constrain or annotate
 it.** Overrides never *add* metrics or change a metric's direction — those are gate-contract
 concerns owned by the project. Reactor never silently invents fields the project didn't declare.
+
+**Trunk red preempts.** [Invariant 1](base-engineering.md#1-origin-is-always-green-on-every-platform)
+requires that a cross-platform failure be *undone*, not merely filed, so a monitor failing on trunk
+is not an ordinary auto-filed bug: it **holds the integration lock** until green. Nothing else
+lands, which is what stops one broken commit from poisoning every worktree branched from it. This is
+the one case where a gate result changes scheduling rather than only recording history, and it is
+deliberate — without it, "detected and undone" is a claim the system does not honor.
 
 The manifest schema, the output envelope schema, and the project-side gate SDK are specified in
 [base-engineering.md](base-engineering.md).

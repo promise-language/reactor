@@ -50,7 +50,7 @@ the "your tools are stale, re-run `./make`" failure mode — does not get ported
 A tool is a directory. You run it:
 
 ```sh
-promise run tools/verify -- --wasm
+promise run tools/format -- --check
 promise run tools/gate -- list --json
 ```
 
@@ -84,9 +84,9 @@ tool needs a shared local library, it needs its own manifest — so each tool is
 ```
 tools/
   common/     promise.toml   — shared library (repo-root detection, platform dispatch, exec helpers)
-  verify/     promise.toml   — use common "../common";
-  gate/       promise.toml
-  guard/      promise.toml
+  gate/       promise.toml   — use common "../common";
+  format/     promise.toml
+  release/    promise.toml
 ```
 
 **Verified against the compiler — this works today**, with three properties the tooling model needs:
@@ -101,7 +101,7 @@ tools/
   same tool by absolute path from `/` produces identical results, so hooks and CI invoking a tool
   from anywhere behave the same.
 - **A change to the shared library invalidates each tool's cached binary.** Editing `common.pr`
-  turns the next `promise run tools/verify` into a cache MISS and picks up the new code — so tools
+  turns the next `promise run tools/gate` into a cache MISS and picks up the new code — so tools
   cannot be silently served stale, which is the failure mode forge's source-hash stamps existed to
   prevent.
 
@@ -193,12 +193,13 @@ The blueprint's *conventions* survive; only its build machinery goes away.
 | `bin/` as a gitignored artifact dir | **gone**, or a directory of thin shims for ergonomics |
 | One tool = one directory under `tools/` | kept — and now *required*, see above |
 | Shared common library across tools | kept — a sibling module (`use common "../common"`), or a catalog module |
-| `bin/verify` as the commit gate | kept — `promise run tools/verify` |
-| Guard hook, pre-commit hook | kept — they invoke `promise run` |
+| `bin/verify` as the commit gate | **superseded** — verify is [derived from the gate manifest](base-engineering.md#verify-is-derived-not-declared) and gates `push:origin`, not commit; no project authors it |
+| Pre-commit hook | kept — it invokes `promise run`, and it *reports* rather than refuses for whole-tree properties ([invariant 2](base-engineering.md#invariants-and-properties-are-enforced-differently)) |
+| Guard hook | **relocated** — a grant enforcer is authority, so its rules come from the companion repo and the arena applies them ([Bounds are authority, not tooling](base-engineering.md#bounds-are-authority-not-tooling)) |
 | Ratcheted `.baselines.json` | kept — unrelated to how tools are built |
 
-Optional ergonomic shim: keep `bin/verify` as a two-line script that execs `promise run
-tools/verify -- "$@"`, so muscle memory, hook configs, and CI invocations don't change. Unlike the
+Optional ergonomic shim: keep `bin/gate` as a two-line script that execs `promise run
+tools/gate -- "$@"`, so muscle memory, hook configs, and CI invocations don't change. Unlike the
 Go `bin/`, that shim is committed text, not a build artifact.
 
 ## Migration
