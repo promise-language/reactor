@@ -263,7 +263,7 @@ still to nail down. A starting proposal, to be argued with:
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
 | Deployment | config.read · config.write · secret:`<name>` |
-| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write · model.quota |
+| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write · `model:<kind>` |
 
 **The tool-surface row is not optional decoration.** Everything an agent reaches through its harness
 is reach that `role ∩ step` cannot describe if it is unnamed, and an MCP server is the clearest
@@ -342,9 +342,10 @@ GitHub-identity deployment; it is never a second source of item identity.
 ### ConfigStore — the deployment owner's residual
 
 Deliberately minimal: only things the project *can't* own because they are the **deployment
-owner's** choice — quota and cost limits, model credentials, arena allocation and provider creds
-(including [how long an absent arena is held before it is declared
-lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)), admin access control. Flows and gates are **not** here; they live in the project.
+owner's** choice — quota and cost limits, [model accounts](#model-accounts--subscription-and-api)
+and their credentials, arena allocation and provider creds (including [how long an absent arena is
+held before it is declared lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)), admin
+access control. Flows and gates are **not** here; they live in the project.
 
 ### LedgerStore — per-server active state
 
@@ -492,6 +493,120 @@ the live binary, re-exec (`os.exec_replace` already exists) — and on P3's SHA-
 what was downloaded. That the *governor* needs the hash check is worth noting: it is the least
 updatable component in the system, so its integrity check is the one that most needs to be right
 the first time.
+
+## Model accounts — subscription and API
+
+> **Status: proposed.** Subscription first; API is a second `kind` rather than a second design.
+
+Agent work is bought two ways, and they are not the same resource. A **subscription** is a flat fee
+for a token budget per rolling window — much cheaper per token, capped, and **perishable**: quota
+not used inside a window is gone. An **API account** bills per token against a spend cap — elastic,
+with no window to waste, and materially more expensive. A fleet wants both, and wants several
+subscriptions running at once.
+
+```
+ModelAccount
+  id          "sub-a" | "api-prod"
+  kind        subscription | api
+  provider
+  quota       subscription: rolling <period>, <token budget>
+              api:          <currency> per <period> spend cap
+  cost_model  flat-fee-per-window | per-token
+```
+
+Accounts live in [ConfigStore](#configstore--the-deployment-owners-residual) with the rest of the
+deployment owner's residual. **Reactor holds the reference, never the credential** — the material is
+provisioned into the arena and Reactor ships no token, so credential scoping stays the strongest
+[choke point](#where-it-is-enforced) and a compromised server leaks no accounts.
+
+### The account belongs to the arena, and that is forced
+
+Agent harnesses authenticate at the level of an OS account — credentials in a home directory or a
+keychain — so an account cannot be chosen per request. It is a property of the environment the step
+runs in, which is precisely the premise the authority model already rests on: **capability comes
+from the environment, not from what code is present.** So an arena is provisioned *with* an account,
+the way it is provisioned with an os and arch, and the account becomes a third eligibility
+dimension for any step that consumes model tokens.
+
+**The account follows the OS user its runner runs as, and needs no new machinery.** A runner is
+already [one per workspace](#deployment-topology--server-governor-runner) and long-lived, and it
+runs as some OS user — so it picks up whatever credential that user's home directory or keychain
+holds. Start each runner on a host under a different OS user and each draws on a different account.
+That is the whole mechanism by which one machine runs several subscriptions at once: several
+workspaces, several runners, several users.
+
+The alternative — a single runner spawning steps as different users — would need privilege to switch
+user on every spawn, which is both a permission surface and a way to attach the wrong credential
+under load. Running the process *as* the user that owns the credential removes the question instead
+of answering it.
+
+Two existing pieces get load-bearing rather than incidental as a result.
+[Reservation renewal by the runner's presence](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)
+is untouched, since nothing about the runner's lifetime changes. And the **per-host verify lock**
+now matters for a concrete reason: several runners on one box genuinely contend for that box's CPU,
+which is the case that lock exists for.
+
+### Quota is estimated, never known
+
+Reactor's token count is an estimate. The provider is authoritative and may refuse mid-step, so
+enforcement needs both halves and neither alone is sufficient:
+
+- **Predictive** — do not dispatch a model-consuming step to an arena whose account is estimated
+  spent. Cheap, and wrong at the margins.
+- **Reactive** — when the provider refuses, mark the account `depleted until T` (the refusal
+  usually says when), and fail the step.
+
+The reactive half needs no new failure semantics: quota exhaustion is already an [infrastructure
+failure](#infrastructure-failures-and-process-failures-are-different-things) by the standing test —
+the work was never evaluated — so it retries unchanged, is not charged to the item, and does not
+feed loop detection. Treating it as a process failure would blame an item for the fleet's budgeting.
+
+### Scheduling — drain the perishable resource first
+
+One asymmetry decides the policy. Subscription quota expires unused; API capacity does not.
+
+> **Among eligible arenas, prefer the one whose subscription window resets soonest. Spill to an API
+> account only when subscription capacity is exhausted, or when an item's latency is worth more than
+> its cost.**
+
+**Affinity beats drain.** That rule picks an arena for an item that has none; an item already
+[bound to an arena](#an-arena-is-leased-to-an-item-not-to-a-step) stays there.
+
+### Depletion makes an arena ineligible, not lost
+
+The awkward case is an account depleting mid-resolution: the item is bound to an arena that holds
+its accumulated state but can no longer think. The arena is neither healthy nor gone, and treating
+it as either is wrong.
+
+It is **temporarily ineligible**, and the choice is a cost comparison the deployment owner
+parameterizes — window resets soon, so wait; resets far away, so revoke the binding and move,
+accepting the loss of transient state; or spill that one item to an API arena. **No new mechanism is
+needed**: depletion with a distant reset is another form of pressure that
+[revokes a binding](#an-arena-is-leased-to-an-item-not-to-a-step), alongside capacity shortage.
+
+### Two currencies, not one
+
+Subscription work has near-zero marginal cost while consuming a scarce expiring resource; API work
+costs real money and is elastic. **Metering them into a single number hides exactly the tradeoff
+being managed**, so the ledger attributes both — tokens against an account's window, and spend
+against a cap — per item, per step, and per account.
+
+### Spending money is a capability
+
+"May draw on an API account" is a grant, not a configuration detail. An untrusted contributor step
+confined to subscription quota has a worst case of a wasted window; the same step with API reach has
+a worst case denominated in currency. That belongs in [the
+vocabulary](#open--the-capability-vocabulary) as `model:<kind>`, so a step grant can say
+*subscription only* and have it enforced by what the arena was provisioned with rather than by the
+step's restraint.
+
+### What phase one leaves out
+
+Only subscriptions are implemented first. The eligibility filter, ledger attribution, and grant
+vocabulary are identical for both kinds; only depletion differs — a resetting window against a spend
+cap that does not reset. **One thing to confirm rather than design around:** provider terms differ
+on whether subscription credentials may be used for automated or headless fleet workloads, and that
+constrains how far the subscription-first path scales.
 
 ## Reliability — never stall, never spin
 
@@ -714,7 +829,9 @@ Reactor's half is four obligations:
   and the next step starts from the last commit. Those are not symmetric, so a healthy binding gets
   **no expiry timer**: it is reclaimed when the pool is genuinely short and otherwise left alone,
   however long the item sits. Under pressure, prefer victims whose item has no step in progress,
-  then least-recently-used, and record the reclamation like any other.
+  then least-recently-used, and record the reclamation like any other. A
+  [depleted model account](#depletion-makes-an-arena-ineligible-not-lost) whose window resets far
+  away is the same kind of pressure and revokes by the same path.
 
 **The binding is revocable, not a lock.** While it stands the scheduler honors it — that is the
 point of recording it — but the server may drop it at any moment, and dropping it is an explicit,
@@ -809,8 +926,11 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   fleet-wide rather than per item.
 - **Every step's cost is metered and attributed** to item and step: tokens, wall time, arena time.
   Work that is not metered cannot be budgeted, and work that cannot be budgeted cannot be stopped.
-- **Budgets are per item and per deployment.** An item that exhausts its budget is parked for a
-  human; it is not retried harder. Quota exhaustion pauses rather than spinning against a limit.
+- **Budgets are per item and per deployment, in two currencies.** Subscription tokens and API spend
+  are not interchangeable — one is a scarce resource that expires, the other is money — so a budget
+  names both rather than collapsing them (see [Model
+  accounts](#two-currencies-not-one)). An item that exhausts either is parked for a human; it is not
+  retried harder. Quota exhaustion pauses rather than spinning against a limit.
 - **Loop detection is a first-class state.** The same step, on the same input digest, failing with
   the same signature N times means the item is *stuck* — it stops being dispatched and is surfaced.
   Stuck and known is a fine state; stuck and busy is precisely the failure this rule exists to
