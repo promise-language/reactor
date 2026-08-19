@@ -667,7 +667,7 @@ From that, a set of rules that admit no exceptions:
 ### Every exclusion is held by a process, never by a flag
 
 Serialization is where unattended systems die quietly. Anything that says *only one at a time* — the
-global "an integration is in progress" lock, the per-host "verify is running here" lock, an
+per-project "an integration is in progress" lock, the per-host "verify is running here" lock, an
 exclusive worktree, an arena assignment, a claimed item's lease — is the same primitive, and it
 obeys one rule:
 
@@ -747,7 +747,7 @@ orders of magnitude:
 
 | | Renewed | Expires in | On expiry |
 |---|---|---|---|
-| **Work leases** — item claims, the integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
+| **Work leases** — item claims, a per-project integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
 | **Arena reservation** — the arena's identity, provisioned state, and assignment to a project and, from first dispatch, to an item | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
 
 **Work never waits on a returning host.** The moment a runner stops renewing, everything it was
@@ -832,6 +832,11 @@ Reactor's half is four obligations:
   then least-recently-used, and record the reclamation like any other. A
   [depleted model account](#depletion-makes-an-arena-ineligible-not-lost) whose window resets far
   away is the same kind of pressure and revokes by the same path.
+- **A binding protecting nothing is released without waiting for pressure.** Demand-driven does not
+  mean cling by default. When an item [blocks on another
+  project](#blocked-is-a-recorded-state-not-a-stall) at a clean step boundary, the arena holds only
+  warm cache, and releasing costs nothing — so it releases immediately rather than idling until
+  someone else needs the capacity.
 
 **The binding is revocable, not a lock.** While it stands the scheduler honors it — that is the
 point of recording it — but the server may drop it at any moment, and dropping it is an explicit,
@@ -978,13 +983,105 @@ concerns owned by the project. Reactor never silently invents fields the project
 
 **Trunk red preempts.** [Invariant 1](base-engineering.md#1-origin-is-always-green-on-every-platform)
 requires that a cross-platform failure be *undone*, not merely filed, so a monitor failing on trunk
-is not an ordinary auto-filed bug: it **holds the integration lock** until green. Nothing else
-lands, which is what stops one broken commit from poisoning every worktree branched from it. This is
+is not an ordinary auto-filed bug: it **holds that project's integration lock** until green. Nothing
+else lands, which is what stops one broken commit from poisoning every worktree branched from it,
+and it holds only that project's lock — a red trunk in one project never blocks another. This is
 the one case where a gate result changes scheduling rather than only recording history, and it is
 deliberate — without it, "detected and undone" is a claim the system does not honor.
 
 The manifest schema, the output envelope schema, and the project-side gate SDK are specified in
 [base-engineering.md](base-engineering.md).
+
+## Cross-project work — change sets and blocking edges
+
+> **Status: proposed.** The project-facing rule is [invariant
+> 5](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped); this
+> is Reactor's half.
+
+Because a step writes exactly one project, a change spanning several decomposes into one item per
+project. What Reactor adds is a way to say *these belong together* and *this one waits for that one*
+— without either becoming a second place project knowledge lives.
+
+### Change sets group; they are never resolved
+
+A **change set** is an aggregate: N per-project items, plus the edges between them. Nobody resolves
+it and it dispatches nothing. It exists so "3 of 5 landed" is answerable, and so a decomposition has
+an identity after the step that produced it has finished.
+
+Three shapes arise, and only one of them needs an edge:
+
+| Shape | Example | Edges |
+|---|---|---|
+| **Independent** | the same lint fix in five projects | none — all resolve in parallel |
+| **Producer → consumer** | one project publishes, another bumps its pin | consumer waits on producer |
+| **Discovery** | resolving in A, the real fix is in B | created mid-flight by the discovering step |
+
+**Reactor owns the change-set record.** Items are issues in a project; a change set spans projects
+and has no project to be an issue in. Putting it in one participant's repo would make that
+participant arbitrarily special, so this is the one item-shaped thing Reactor stores outright rather
+than mirroring from a code host. The cost is real and worth naming: it is a population that exists
+nowhere else, so it must be visible in the admin UI or it is invisible entirely.
+
+**A code host's own cross-repo boards are a projection, never the source.** Reactor may render its
+edges onto one for humans to read, one-way. It must not read them back: answering "is this
+unblocked?" has to be mechanical on a slow tick, and a board somebody maintains by hand is exactly
+the mirrored-project-knowledge failure [no manual gate
+registration](base-engineering.md#no-manual-gate-registration) exists to prevent. Such boards are
+also owned by one org, which cannot express a dependency on a project in an org you do not control —
+the case the artifact edge below handles instead.
+
+### An edge names a target and a condition, never a version
+
+The producer's release version is not knowable when the edge is created, so an edge that hard-codes
+one is wrong the moment it is written. The edge names *what it waits on* and *what counts as
+satisfaction*; the producing item publishes the fact that satisfies it.
+
+**Two conditions**, and the difference between them is that landing is not releasing:
+
+| Condition | Unblocks when | Use when |
+|---|---|---|
+| `landed` | the producer item reaches a terminal landed state on trunk | the consumer only needs the change to exist — it vendors by path, or its next rebase picks it up |
+| `published` | the producer item records the artifact version it produced | the consumer must bump a pin, and a merge that has not been cut into a release gives it nothing |
+
+**Three target kinds**, because the producer is not always a Reactor item:
+
+- **A Reactor item** — in-deployment, either condition above, and it requires the target project to
+  be in the waiting item's read scope.
+- **An external issue** — a URL whose state Reactor polls.
+- **An artifact version** — "unblock when `promise@≥0.9.0` exists."
+
+The third is the one that crosses boundaries the first two cannot. **A published version is a public
+fact requiring no shared permissions, no common organization, and no agreement between the two
+projects that they are related** — so a project waiting on a language feature can express exactly
+that, while remaining invisible to the project it waits on, and vice versa.
+
+### Blocked is a recorded state, not a stall
+
+- **Cycles are refused at edge creation.** A waiting on B waiting on A is a deadlock that will
+  otherwise be found by load. Reject the edge that would close a cycle; if one is somehow reached,
+  park it with a stated reason rather than letting the scheduler discover it as silence.
+- **Blocked items surface by age; they never expire.** An item blocked for months on an external
+  issue is indistinguishable from an abandoned one unless something ages it into view — but
+  expiring it would discard correct, completed work. So it rises in the admin UI and stays
+  resolvable.
+- **Blocking normally releases the arena.** A blocked item is not about to run, and blocking
+  happens at a clean step boundary — the discovering step commits its work, files the blocker, and
+  reports — so what remains on the arena is warm cache whose value decays to nothing over the
+  timescale a block lasts. The [binding](#an-arena-is-leased-to-an-item-not-to-a-step) is therefore
+  released outright rather than merely deprioritized, because it is protecting nothing. The
+  exception is the rare case where an item becomes blocked while a step is interrupted mid-flight:
+  that arena holds unrecoverable state, so the binding is kept and ranks first among victims under
+  pressure.
+
+### Serialization is per project, not per fleet
+
+The [integration lock](#every-exclusion-is-held-by-a-process-never-by-a-flag) is **per project**. A
+single global one would make every project's landings queue behind every other project's for no
+reason at all, which is a throughput bug that only appears once there is more than one project — and
+the same applies to [trunk-red preemption](#gate-execution--reactors-half): red in one project must
+never hold another project's lock. Exclusions that are genuinely about a shared physical resource —
+the per-host verify lock, `host:cpu` — stay host-scoped, because that contention is real regardless
+of which project caused it.
 
 ## Platform requirements — requested of Promise
 

@@ -33,7 +33,8 @@ where:
 - **Cross-platform verify is detective, with mandatory preemption.** The matrix cannot gate a push
   from one host at acceptable cost. That is permitted by the [materiality
   test](design.md#where-it-is-enforced) — "prevented, *or* detected and undone" — but only if the
-  undoing actually happens, so: **trunk red on any platform holds the integration lock.** Nothing
+  undoing actually happens, so: **trunk red on any platform holds that project's integration
+  lock.** Nothing
   else lands until it is green. That single coupling is what stops the poisoning cascade, and it
   reuses a mechanism that already exists rather than adding one.
 
@@ -197,6 +198,70 @@ after arena loss is, and is subject to the ordinary
 carries forward is the tree and whatever the agent and its tools wrote down. That is an argument for
 agents that externalize their state as they work, and it is not a property the fleet can enforce for
 them.
+
+### 5. A change writes to one project, and reads only what it was scoped
+
+Reactor orchestrates many projects, and work sometimes spans them. Both halves of that need
+bounding, and they bound differently:
+
+> **A step writes the tree of exactly one project — the one its item belongs to — and reads only
+> the projects its item's scope names.**
+
+**Write, because the alternative breaks three things at once.** A step holding push credentials for
+N repos has N times the blast radius, which is the one quantity the authority model exists to keep
+small. Pushes cannot be made atomic across repos, so a multi-repo landing has a window in which some
+trees are updated and others are not — [invariant 1](#1-origin-is-always-green-on-every-platform)
+violated by construction rather than by accident. And an item is an issue in a project; a change
+that belongs to several has no home to be an issue in.
+
+**Read is not automatically broad either.** Two unrelated projects can share one Reactor — two
+people orchestrating work that has nothing to do with each other — and neither should be able to
+read the other's tree merely because they share a deployment. So the default read scope of an item
+is **its own project and nothing else**, and anything wider is granted:
+
+> **Effective read scope = deployment tenancy ∩ the item's declared need.**
+
+That is the same composition as [role ∩ step](design.md#authority-roles-steps-and-capabilities),
+for the same reason: the deployment owner draws the tenancy boundary, the project declares which
+neighbours it actually needs to see inside that boundary, and neither may widen the other. Declaring
+the need is least privilege — "everything in my tenant" is not a scope.
+
+**Enforcement is materialization.** The arena clones only what the scope names, read-only. A tree
+that was never materialized cannot be read, which puts this in the same class as credential scoping
+rather than in the class of rules an agent is asked to respect.
+
+#### Coupling goes through versions, so ordering is enough
+
+The objection to writing one project at a time is the atomic case: a contract change whose halves
+must land together. That case should not exist here, and the reason it does not is already in the
+design — **projects consume each other by pinned version, never by floating trunk.** A companion
+repo pins the flow common library through ordinary module resolution; flows are versioned artifacts
+resolved per step. So a producer landing never breaks a consumer. The consumer breaks only when it
+chooses to bump its pin, which is its own work item, in its own tree, gated by its own verify.
+
+**The version pin converts an atomicity requirement into an ordering requirement**, and ordering is
+easy. Which gives a rule worth stating, because violating it is what makes cross-repo edits feel
+necessary:
+
+> **A repo boundary must be drawn where a version boundary can exist.** If two things must change
+> together with nothing versioned between them, they belong in one repo. "This change spans repos
+> atomically" is a report that the split is in the wrong place, not a request for a feature.
+
+#### Discovery files, it does not fix
+
+The common case is not planned at all: a step resolving an item in one project finds the real fix
+belongs in another. It must not edit that tree, and it must not stop and wait for a human. It
+**files an item in the other project and blocks its own on it.**
+
+So the cross-project grant is `item.create` in a named project — not tree write, not push. **An
+agent's reach across a boundary is the ability to ask.** Filing requires that project to be in the
+item's read scope, so visibility governs this too: an item cannot file into a project it cannot see.
+
+`blocked on <item>` is then a recorded state with an owner and a resolution path, which is better
+than parking for a human, because the blocker is itself an item the fleet can resolve unattended.
+The stall becomes throughput. Reactor's half — change sets, the kinds of blocking edge, and what
+happens to the arena — is in
+[design.md](design.md#cross-project-work--change-sets-and-blocking-edges).
 
 ## Two layers, often confused
 
