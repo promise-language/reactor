@@ -33,10 +33,13 @@ where:
 - **Cross-platform verify is detective, with mandatory preemption.** The matrix cannot gate a push
   from one host at acceptable cost. That is permitted by the [materiality
   test](design.md#where-it-is-enforced) — "prevented, *or* detected and undone" — but only if the
-  undoing actually happens, so: **trunk red on any platform holds that project's integration
-  lock.** Nothing
-  else lands until it is green. That single coupling is what stops the poisoning cascade, and it
-  reuses a mechanism that already exists rather than adding one.
+  undoing actually happens. So a failing monitor **files a repair item, and that item holds the
+  project's integration lock** until green, dispatched ahead of the queue. Nothing else lands until
+  it is, which is what stops the poisoning cascade — and giving the lock a *holder* rather than
+  making redness a flag is what keeps it inside
+  [the lease rule](design.md#every-exclusion-is-held-by-a-process-never-by-a-flag), releases it
+  automatically if the repair dies, and leaves the repair itself able to integrate because it holds
+  the lock rather than being excluded by it.
 
 **Prefer to make it preventive anyway, by running the matrix pre-merge on the PR.** There, latency
 hides — PRs verify in parallel while integration serializes — whereas fanning the matrix out under
@@ -98,8 +101,12 @@ Charging queue time to the work deadline makes a timeout a function of fleet loa
 failing under contention — exactly when the system is busiest and a false failure costs most. The
 deadline must measure work.
 
-Three things follow, none optional:
+Four things follow, none optional:
 
+- **A name is `<scope>:<leaf>`.** The scope — `project`, `host`, `arena`, `global` — is understood
+  by Reactor and the leaf is opaque to it, so a project can invent `project:migration` without a
+  change to the shared layer, while Reactor still knows that `project:integration` in two projects
+  is two locks and `host:cpu` on one box is one.
 - **The declaration is static.** A step names its exclusions ahead of time, so Reactor can acquire
   them in a canonical order. Locks discovered at acquisition time cannot be ordered, and unordered
   acquisition of more than one lock is a deadlock waiting for load to find it.
@@ -225,6 +232,13 @@ That is the same composition as [role ∩ step](design.md#authority-roles-steps-
 for the same reason: the deployment owner draws the tenancy boundary, the project declares which
 neighbours it actually needs to see inside that boundary, and neither may widen the other. Declaring
 the need is least privilege — "everything in my tenant" is not a scope.
+
+**The project declares a default; an item type may narrow it, never widen it.** Item types are
+already declared in the companion repo, so per-type scoping costs almost nothing and keeps a
+docs-only item from seeing the neighbours a release item legitimately reads. Per-*step* scoping is
+ruled out by [invariant 4](#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward): an
+arena is bound to an item for its whole resolution, so the set of repos cloned into it must be fixed
+before first dispatch and stay stable. Item type is known at creation; the step is not.
 
 **Enforcement is materialization.** The arena clones only what the scope names, read-only. A tree
 that was never materialized cannot be read, which puts this in the same class as credential scoping
@@ -370,7 +384,7 @@ the server runs outside the arena and is **proxied through Reactor**, which mirr
 redirects. Same invariant, same single trust path, and the proxy is the natural place to enforce the
 per-tool grant and log the calls — which supplies the post-hoc audit layer on the one resource where
 prevention is hardest. See [the capability
-vocabulary](design.md#open--the-capability-vocabulary) for how the grant is expressed.
+vocabulary](design.md#the-capability-vocabulary) for how the grant is expressed.
 
 ### Visibility is a constraint, not a detail
 
@@ -431,20 +445,41 @@ no credential that would let it, and the API would reject the call. Splitting bi
 constrain behavior would be defending with the one mechanism the design explicitly does not rely
 on.
 
-### Naming the shared layer
+### The shared layer is one repo
 
-**A BASE layer already exists in embryo — it is
-`workspace`** (still private), which delivers flows, provisions
-arenas, and materializes worktrees. It is not framed as such, and it carries exactly the two-layer
-mixture described above: generic machinery beside `projects/promise/` and `projects/tracker/`. The
-question is less "create a base repo" than "name the layer that exists, move the per-project halves
-out, and port it to Promise" — which follows from the flow common library being Promise.
+**It is [`promise-language/base`](https://github.com/promise-language/base)**, public, and it
+consolidates what was previously spread across `workspace` (delivery, provisioning, arena setup),
+[forge](https://github.com/promise-language/forge) (dev-tooling conventions), and the flow common
+library and gate SDK. A BASE layer already existed in embryo as `workspace` — still private, and
+carrying exactly the two-layer mixture described above, generic machinery beside `projects/promise/`
+and `projects/tracker/`. The work is less "create a repo" than "name the layer that exists, move the
+per-project halves out, and port it to Promise".
 
-Candidate consolidation: **workspace** (delivery, provisioning, arena setup) +
-[forge](https://github.com/promise-language/forge) (dev-tooling conventions) + the flow common
-library and gate SDK. The [white paper](../WHITEPAPER.md) would move too — the methodology is not
-the orchestrator — at the cost of breaking public inbound links from promise's README and the
-generated `promise-lang.org/base` page.
+**One repo, several modules.** Subdirectory module addressing
+([P12](design.md#platform-requirements--requested-of-promise), resolved in trunk) puts the subpath
+on the *named* require entry, so several entries may point at one URL with different subdirs. That
+is what makes consolidation work rather than merely tolerable: Reactor depends on the wire types
+alone, a flow on the wire types plus the common library, and a project's gate on the gate SDK alone,
+none of them pulling the others into their compilation.
+
+**What it costs is fetch, not compilation.** Addressing is not fetching, so until partial clone
+([P13](design.md#platform-requirements--requested-of-promise)) lands, a consumer wanting only the
+gate SDK still clones the whole repo with full history. Shared fetch amortizes that across modules
+taken from the same repo without shrinking the first one. This is a known, deferred delivery cost
+rather than an open problem: the fix belongs in the layer that already mirrors flow releases instead
+of redirecting runners to a code host, and the trigger for building it is the first gate author
+outside the organization.
+
+**Base carries an epoch obligation the other repos do not.** Transitive dependencies resolve at the
+*consumer's* epoch, and base is consumed by repos it does not control — every companion repo, and
+for the gate SDK any third-party project. So base must stay compatible with the widest epoch span
+across all of them, and so must everything base itself depends on. The practical consequence is that
+**base should depend on as little as possible**, since each dependency narrows the range of
+consumers it can serve.
+
+The [white paper](../WHITEPAPER.md) could move here too — the methodology is not the orchestrator —
+at the cost of breaking public inbound links from promise's README and the generated
+`promise-lang.org/base` page. Left where it is for now.
 
 ## Dev tooling
 
@@ -572,6 +607,13 @@ avoid.
   version and partly by the next, so a resolution is not reproducible from a single flow version.
   Recovering from a broken flow immediately is worth more than that reproducibility, especially
   during project bootstrap when flow bugs are frequent.
+
+  **That tradeoff is only survivable if versions can read each other's leavings.** Per-step
+  resolution means step 3 may run under one flow version and step 4 under the next, so **persisted
+  step state written by one version must be readable by the next**, and the flow↔Reactor wire must
+  tolerate the same skew — see [a shared module is not a shared
+  version](design.md#a-shared-module-is-not-a-shared-version). Without both, "picked up by the
+  remaining steps" describes a corruption rather than a recovery.
 
   Every actor fetches flows the same way, from the same server — including external contributors,
   who have an account and a restricted role rather than a serverless path of their own. That
@@ -709,7 +751,7 @@ sign these were never one thing.
 
 So a gate gains a `blocks` field, orthogonal to `schedule` — a gate may do both, blocking a push
 *and* running every four hours to catch flakiness and environmental drift. **`blocks` values are
-drawn from the [VCS capability vocabulary](design.md#open--the-capability-vocabulary)**
+drawn from the [VCS capability vocabulary](design.md#the-capability-vocabulary)**
 (`commit`, `push:branch`, `push:origin`, `pr.create`, `pr.merge`) rather than a parallel set of
 transition names, so "which gates block this action" is a lookup keyed on the same strings the
 grants are written in.
@@ -828,9 +870,9 @@ point head-only and every-commit are the same thing and the question stops exist
 | `gates[].host_os` | `linux` / `darwin` / `windows` / `any`. Eligibility filter. |
 | `gates[].host_arch` | Optional `amd64` / `arm64` filter — lets a project target "linux arm64" separately from "linux amd64" without a target-triple grammar. Omitted ≡ any. |
 | `gates[].timeout` | Duration (`30m`, `2h`). Bounds *work*, not queue wait — [invariant 3](#3-serialization-is-declared-and-waiting-for-it-is-not-work). |
-| `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#open--the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
+| `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
 | `gates[].schedule` | Monitor cadence: `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. Omitted ≡ never scheduled (a pure precondition). |
-| `gates[].serialized_by` | Named exclusions this gate needs. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
+| `gates[].serialized_by` | Named exclusions this gate needs, each `<scope>:<leaf>` with scope in `project` / `host` / `arena` / `global`. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
 | `gates[].allow_dirty_tree` | Skip the post-run clean-tree check. |
 | `gates[].tags` | Free-form; attached to auto-filed bugs. Also the selector for verify subsets (`verify --tags wasm`). |
 | `gates[].metrics[]` | One spec per metric the gate emits. |

@@ -138,6 +138,34 @@ Consequences:
 The no-FFI fact still binds wherever another language legitimately remains — a project's own gates,
 and whatever Go tooling survives.
 
+### A shared module is not a shared version
+
+One shared module removes hand-synchronization; it does **not** remove version skew, and conflating
+the two would be the expensive mistake here. Promise rejects conflicting pins *within one
+compilation*, but Reactor and a flow are separate compilations producing separate binaries — so a
+flow built against one commit of the wire module talking to a Reactor built against another is
+invisible to the module system. Nothing errors at build time; the mismatch arrives as a malformed
+field at runtime.
+
+And skew is not a hazard to guard against, it is **guaranteed by three decisions already made**: the
+flow version resolves [per step](base-engineering.md#the-principle), so one item spans versions; the
+runner self-updates *after* a server upgrade, so runner and server routinely differ; and companion
+repos build on their own cadence, so Reactor cannot force a rebuild.
+
+> **The wire carries a `schema_version`, Reactor refuses unknown majors, and evolution within a
+> major is additive-only** — never remove a field, never repurpose one.
+
+That is deliberately the same rule the [gate
+manifest](base-engineering.md#gate-discovery--the-project-declares-reactor-discovers) already
+follows. The asymmetry — a versioned contract for gates and an unversioned one for flows — was an
+oversight, not a decision. Additive-only is what makes a one-version skew safe by construction
+rather than by luck.
+
+**Persisted step state inherits the same requirement.** If step 3 runs under one flow version and
+step 4 under the next, then what the first wrote must be readable by the second. Per-step resolution
+is what makes an async flow fix useful, and state compatibility is what makes that survivable rather
+than merely acknowledged.
+
 ## Authority: roles, steps, and capabilities
 
 > **Status: proposed model, not yet settled.** Reactor resolves work items of any kind, and *who may
@@ -249,20 +277,22 @@ A second property falls out of the same declarations: **Reactor can check static
 capable of completing a flow** — every step's required capabilities must lie within the role's
 ceiling — and reject an impossible assignment before dispatching any work.
 
-### Open — the capability vocabulary
+### The capability vocabulary
 
-The model is only as good as the resource/verb vocabulary it is expressed in, and that is the part
-still to nail down. A starting proposal, to be argued with:
+The model is only as good as the resource/verb vocabulary it is expressed in. The four questions
+this table left open are settled below; the vocabulary itself will still grow as new resources
+appear, and each addition has to answer the same question — what does this let an agent reach that
+`role ∩ step` could not otherwise describe?
 
 | Resource | Capabilities |
 |---|---|
-| Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write |
-| Source tree | read · write |
+| Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write · **routing** (`flow:` labels, assignee) |
+| Source tree | read · write:`<glob>` (allow) minus `<glob>` (deny) |
 | VCS | commit · push:branch · push:origin · pr.create · pr.merge |
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
 | Deployment | config.read · config.write · secret:`<name>` |
-| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write · `model:<kind>` |
+| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write |
 
 **The tool-surface row is not optional decoration.** Everything an agent reaches through its harness
 is reach that `role ∩ step` cannot describe if it is unnamed, and an MCP server is the clearest
@@ -293,16 +323,64 @@ load-bearing:
 Where the servers come from, and why a tree-provided one may only ever be granted read, is in
 [base-engineering.md](base-engineering.md#bounds-are-authority-not-tooling).
 
-Questions this has to answer before it is settled: whether `annotate:<kind>` is the right
-granularity or item fields need per-field grants; whether tree write should be path-scoped (a step
-that may edit source but not `.github/`); how a step declares a capability it needs *conditionally*;
-and whether roles compose (inherit) or are flat.
+Four questions the vocabulary left open, now settled.
+
+**Tree write is path-scoped, as a broad allow-list minus deny carve-outs.** A step names globs it
+may write — `**` and `*.pr` are both legitimate answers, so breadth costs one character — and a
+deny list carves out what stays untouchable inside them. **Deny always beats allow**, and **absence
+of an allow entry means no tree write at all**, so `plan` gets its "cannot touch the tree" for free
+and a step that writes says so even when it says `**`. The point of the carve-outs is to convert
+in-tree controls from detective to preventive: a gate baseline or CI workflow edited silently is
+caught by review today, and refused outright once it is denied. Guard enforces at write time for
+fast feedback, but **the authoritative check is the resulting diff at the step boundary**, because a
+path check alone is escapable by rename.
+
+**Routing fields are their own capability, because they are not item data.** Eligibility is decided
+by `flow:` labels plus assignee, so a step that can write them can relabel its own item into a flow
+its role may not run — a silent, immediate widening achieved without touching any authority config.
+Everything else stays kind-grained; a vocabulary that tracks the item schema field by field would
+churn and get skimmed.
+
+**Roles are flat, explicit sets — they do not inherit.** A ladder would be more concise, but
+inheritance is a mechanism for widening capabilities silently: adding one to a base role grants it
+to every role above, and the diff that did it touches a role nobody was reviewing. That is the
+failure this model treats as categorically worse than any other, and there are few enough roles that
+duplication is a lint rather than a cost.
+
+**A conditionally-needed capability is declared at its worst case, and the step splits when that
+matters.** Runtime escalation would be tighter, but it destroys the static check below — a step
+whose needs appear at runtime cannot be validated against a role in advance — and it puts the
+constrained party in charge of initiating its own widening. Where over-granting genuinely costs
+something, the project splits the step into a narrow common path and a wider exceptional one, which
+this design already permits and which needs no new mechanism.
 
 **Where the declarations live is part of the model, not a packaging detail.** Roles and step grants
 must sit somewhere the agents they constrain cannot reach — otherwise an `implement` step could
 widen its own grant, and the bound would be self-authorizing. Since flows operate on the *project*
 worktree, the declarations belong outside it: see
 [What lives where](base-engineering.md#what-lives-where).
+
+### What a flow declares, and what is declared about it
+
+A step carries two kinds of declaration and they cannot share a source, because one of them is the
+flow describing itself and the other is the system constraining the flow.
+
+> **A flow is never trusted to limit itself.** So anything that *bounds* a step is read
+> independently of the flow, and anything that merely *describes* it comes from the flow.
+
+| | Declared by | Contents |
+|---|---|---|
+| **Operational** | the flow binary, via a `describe` command | item types, eligibility, `serialized_by`, fresh-session and arena-independent hints |
+| **Authority** | companion-repo config Reactor reads on its own | roles, step grants, capabilities, read scope |
+
+The split is not fussiness. A flow emitting its own grants would be the constrained party describing
+its constraints, and Reactor could then check a step only against what the flow chose to admit.
+Conversely, operational facts are best known by the code implementing them — keeping them in the
+binary is what stops a step's declared exclusions from drifting from what the step actually does.
+
+`describe` is deliberately symmetric with `bin/gate list --json`: a subprocess that emits a manifest
+Reactor validates. That symmetry is worth preserving, because it means one discovery mechanism
+serves both halves of the system.
 
 ## Persistence
 
@@ -590,14 +668,21 @@ costs real money and is elastic. **Metering them into a single number hides exac
 being managed**, so the ledger attributes both — tokens against an account's window, and spend
 against a cap — per item, per step, and per account.
 
-### Spending money is a capability
+### Which pocket pays is not the step's business
 
-"May draw on an API account" is a grant, not a configuration detail. An untrusted contributor step
-confined to subscription quota has a worst case of a wasted window; the same step with API reach has
-a worst case denominated in currency. That belongs in [the
-vocabulary](#open--the-capability-vocabulary) as `model:<kind>`, so a step grant can say
-*subscription only* and have it enforced by what the arena was provisioned with rather than by the
-step's restraint.
+A step should not know or care how its tokens are paid for. Payment is a **deployment** concern —
+the same work is the same work whether it drew on a subscription window or a metered key — so
+nothing about accounts appears in a step declaration or in the capability vocabulary.
+
+**Reactor decides, from admin configuration.** The subscription is ambient to the arena and cannot
+be withheld; the API key is injected into a step's process environment only when the deployment says
+so. That asymmetry lands exactly on the risk boundary: the credential that costs money is the one
+that can be withheld, and withholding it is credential scoping rather than a policy check, so a step
+running without it cannot spend money whatever it does.
+
+Putting this in a step grant instead would have coupled a project's flow definition to the
+deployment's billing arrangement, and made every flow author responsible for a decision that is not
+theirs to make.
 
 ### What phase one leaves out
 
@@ -731,6 +816,14 @@ of it is three mechanisms.
   `serialized_by` — the per-host verify lock, an exclusive worktree, a resource cap like `host:cpu`.
   The effective set is the step's own union everything it invokes, derived from the manifest rather
   than hand-listed on the step, or the two declarations drift and the ordering guarantee is lost.
+- **A name is `<scope>:<leaf>`, and only the scope is Reactor's business.** Scope is drawn from a
+  closed set — `project`, `host`, `arena`, `global` — and the leaf is opaque, so a project may
+  invent `project:migration` without a change to the shared layer. Reactor resolves `project:`
+  against the item's project, so two projects never contend on the same leaf, while `host:cpu`
+  contends across everything on that box regardless of which project caused it. **The scope is what
+  makes the name meaningful to the scheduler**: opaque strings would force Reactor to treat every
+  exclusion as global and serialize unrelated projects against each other. Ordering is separate and
+  easier — any total order over names works, so lexicographic suffices.
 
 **Waiting is still a watched state.** A step blocked on an exclusion has a live process and a
 registry entry like any other; "waiting for the integration lock" traces to a pid and a queue
@@ -982,9 +1075,21 @@ concerns owned by the project. Reactor never silently invents fields the project
 
 **Trunk red preempts.** [Invariant 1](base-engineering.md#1-origin-is-always-green-on-every-platform)
 requires that a cross-platform failure be *undone*, not merely filed, so a monitor failing on trunk
-is not an ordinary auto-filed bug: it **holds that project's integration lock** until green. Nothing
-else lands, which is what stops one broken commit from poisoning every worktree branched from it,
-and it holds only that project's lock — a red trunk in one project never blocks another. This is
+is not an ordinary auto-filed bug: Reactor **files a repair item, and that item holds the project's
+integration lock** until green, dispatched ahead of the queue. Giving the lock a real holder matters
+rather than being bookkeeping: a lock held by a *state* is a flag, which
+[the lease rule](#every-exclusion-is-held-by-a-process-never-by-a-flag) forbids precisely because
+nothing releases it when the process that noticed dies. It also resolves what would otherwise be a
+deadlock — the repair is the one thing that *can* integrate, because it holds the lock rather than
+being excluded by it — and it makes "why is nothing landing" a question with a clickable answer.
+
+A repair that parks for a human freezes that project's landings. That is the correct behaviour, not
+a flaw: building on a known-red trunk is the cascade the invariant exists to stop. It must be
+loudly visible, and a deployment owner may want an override.
+
+Nothing else lands, which is what stops one broken commit from poisoning every worktree branched
+from it, and it holds only that project's lock — a red trunk in one project never blocks another.
+This is
 the one case where a gate result changes scheduling rather than only recording history, and it is
 deliberate — without it, "detected and undone" is a claim the system does not honor.
 
@@ -1099,6 +1204,15 @@ Reactor's design assumes these land; it does not design around their absence.
 | P5 | **Atomic file replace + advisory locking + fsync** | `io` has no `rename`, no `flock`, no `sync` | the repo-backed stores' durability model is write-temp-then-rename; the lease ledger has concurrent writers |
 | P6 | **HTTP client essentials** | no redirects, no keep-alive/pooling, no response gzip | GitHub API access at read-index volume, under rate limits |
 | P14 | **Child-process control beyond spawn/kill/wait** | `Process.kill` sends SIGKILL only; no process groups; no way to signal or wait on a pid this process did not spawn | the runner's [watchdog](#nothing-runs-unwatched) — graceful termination, killing a process *tree*, and cleaning up a previous life's children after a restart |
+| P15 | **Argument passing through `promise run`** | passes **no** arguments at all; a trailing token is misread as the source path and `--` is not a separator | every Promise dev tool, and therefore `bin/gate list --json` — the one command BASE requires of a project |
+
+**P15 — tool arguments.** A dev tool that cannot take arguments is not a dev tool, and this sits
+directly under the only contract BASE mandates. It is listed as **blocking** rather than worked
+around, because the available workarounds are both wrong: shipping compiled shims rebuilds the forge
+machinery the Promise tooling model exists to delete, and reshaping the contract into something
+argument-free would leak a Promise limitation into a surface that is deliberately language-neutral —
+a Rust project satisfies it with `cargo` and has no argument problem at all. See
+[promise-forge.md](promise-forge.md), requirement 3.
 
 **P1 — TLS**, mapped through the PAL to each platform's TLS stack rather than implemented in
 Promise. Because the handshake, cipher suites, and certificate verification come from the OS, this
@@ -1209,13 +1323,14 @@ edges of process control are missing, and those are P14.
 
 ## Milestones
 
-> **Not yet defined.** Sequencing waits until *what lives where, and what each piece is for* is
-> settled — the [authority model](#authority-roles-steps-and-capabilities), the
-> [topology](#deployment-topology--server-governor-runner), and the
-> [BASE layer boundary](base-engineering.md) all move pieces across repos, and a build order drawn
-> before those settle would only have to be redrawn.
->
-> The platform requests above are independent of sequencing and stand as they are.
+> **Unblocked, not yet drawn.** Sequencing waited on *what lives where and what each piece is
+> for*; the authority model, the topology, and the
+> [BASE layer boundary](base-engineering.md) are now settled enough that a build order would no
+> longer have to be redrawn. Two things gate the *start* rather than the shape: `promise run`
+> argument passing, without which no Promise dev tool can take arguments, and the promotion of P12
+> out of trunk. Neither affects the design, so the contract work — wire types, the gate output
+> envelope schema, and the flow `describe` schema — proceeds in parallel and is waiting when they
+> land.
 
 ## Decisions locked
 
@@ -1276,6 +1391,19 @@ edges of process control are missing, and those are P14.
 - **The server never reaches into a host.** Runners always initiate outbound and long-poll. Cloud
   arena provisioning is the sole exception, since there is no host to run an arena-host runner on.
 - **Keep cloud arenas** — mostly implemented, and the practical way to run cross-platform gates.
-- **All four repos (promise/flow/forge/reactor) are public**; cross-repo deps are versioned
+- **The public repos are promise, flow, forge, reactor, and base**; cross-repo deps are versioned
   dependencies, not submodules.
+- **The BASE layer is one repo**, publishing several independently addressable modules as
+  subdirectory modules. Reactor takes the wire types alone, a flow takes wire types plus the common
+  library, a project's gate takes the gate SDK alone.
+- **Wire compatibility is explicit, not assumed.** A `schema_version` on the wire, unknown majors
+  refused, additive-only evolution within a major, and persisted step state readable across a flow
+  version change. A shared module removes hand-synchronization, not skew.
+- **A flow describes itself; the system constrains it separately.** Operational facts come from the
+  flow's `describe`; roles, grants, capabilities, and read scope are read from companion-repo config
+  Reactor loads independently. See
+  [What a flow declares](#what-a-flow-declares-and-what-is-declared-about-it).
+- **Which pocket pays is the deployment's business, not the step's.** Subscriptions are ambient to
+  an arena, API keys are injected by Reactor from admin config, and no account appears in a step
+  declaration.
 - Build tooling is the **forge blueprint** (`./make`, `bin/verify`, ratcheted baselines, guard).
