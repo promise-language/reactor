@@ -51,6 +51,30 @@ through, not the primary mechanism.
 warm local state for *correctness* — only for speed. That is what `preflight` is for, and a CI job
 that clones fresh and runs verify is the cheapest way to keep it true.
 
+#### What "every platform" means
+
+The word carries three different meanings, and the invariant is only well-defined once they are
+separated:
+
+| | What it is | Declared as |
+|---|---|---|
+| **Target** | what the product is built *for* — the thing green must hold for | project-level `targets` |
+| **Host** | where a gate process runs | `host_os` / `host_arch` on the gate |
+| **Runnable here** | whether a given host can execute the gate for a given target | not declared — *derived* from the two above |
+
+> **"Origin is green on every platform" means: for every declared target, the gates that speak for
+> that target are green.**
+
+Host and target coincide often enough that conflating them mostly works, and then stops. A
+`wasm32` target has no host of its own — it is built anywhere and run in a runtime. A Windows target
+can be *built* from another host wherever cross-compilation exists, but its tests generally cannot
+be *run* there. So a gate declares where it can run and, when it differs, what it speaks for;
+whether some host can cover some target is then an ordinary eligibility question rather than a new
+concept.
+
+**A single-target project needs none of the machinery below**, and this is what makes that
+determination crisp: one entry in `targets`, so the matrix is a matrix of one.
+
 #### Choosing preventive per change
 
 Running the full matrix on every item is safe and caps throughput; running it on none is fast until
@@ -58,10 +82,18 @@ a platform-divergent change lands. Neither is right, so **which mode a given ite
 the item carries**, and it has three parts: a cheap floor that always runs, a predictor that
 escalates, and an automatic escalation once trunk is already red.
 
-**A cross-platform build always runs.** Not the test suite — just the build, on every supported
-platform. Platform-divergent code characteristically fails to *compile* elsewhere long before it
-fails a test, and a build is a small fraction of a full verify. This is the tier that catches most
-of the damage for very little of the cost.
+**Build every target, where that is affordable.** Not the test suite — just the build. Platform-
+divergent code characteristically fails to *compile* for another target long before it fails a test
+there, so this tier catches most of the damage for a fraction of a full verify.
+
+How cheap it actually is depends on the toolchain, and the honest answer today is *not as cheap as
+it sounds*. With cross-compilation it collapses to one host building every target, which is close to
+free. Without it — Promise cannot cross-compile yet, see
+[P10](design.md#platform-requirements--requested-of-promise) — building every target means
+dispatching to an arena per target, so the *coordination* costs the same as the full matrix and only
+the occupancy is smaller: minutes of a machine instead of half an hour. Still worth having, but a
+project whose toolchain cannot cross-compile should size this tier against its arena capacity rather
+than assume it is free.
 
 **A predictor escalates an item to the full matrix**, and the signal is narrower than it first
 appears. The dangerous change is not one that touches every platform — it is one that touches
@@ -1153,6 +1185,7 @@ point head-only and every-commit are the same thing and the question stops exist
 {
   "schema_version": 1,
   "project": "promise",
+  "targets":        ["linux/amd64", "linux/arm64", "darwin/arm64", "windows/amd64", "wasm32"],
   "preflight": {
     "default": "./make",
     "windows": ".\\make.cmd"
@@ -1179,6 +1212,18 @@ point head-only and every-commit are the same thing and the question stops exist
       ]
     },
     {
+      "name":            "promise-wasm-tests",
+      "command":         "bin/gate test --wasm",
+      "host_os":         ["linux", "darwin"],
+      "target":          "wasm32",
+      "timeout":         "20m",
+      "blocks":          ["pr.merge"],
+      "tags":            ["tests", "wasm"],
+      "metrics": [
+        { "name": "test_failures", "type": "int", "direction": "down", "mode": "enforced", "cap": 0 }
+      ]
+    },
+    {
       "name":            "promise-format",
       "command":         "bin/gate format",
       "fix":             "bin/format",
@@ -1197,11 +1242,13 @@ point head-only and every-commit are the same thing and the question stops exist
 | Field | Meaning |
 |---|---|
 | `schema_version` | Major version; Reactor refuses unknown majors. |
+| `targets` | What the product is built **for** — the set [invariant 1](#what-every-platform-means) means by "every platform". A single entry makes the project single-target and the matrix a matrix of one. |
 | `preflight` | Optional global setup command Reactor runs after a fresh checkout, before any gate (build the gate binary itself, sync submodules, sanity-check the tree). OS-dispatched. |
 | `gates[].name` | Stable id; keys metric history and baselines. **Must be unique within the manifest.** |
 | `gates[].command` | Exec line. OS-dispatched. |
 | `gates[].fix` | Optional deterministic remediation command. OS-dispatched. **Never run by the gate runner** — see [The check/fix pair](#the-checkfix-pair). |
 | `gates[].host_os` | `linux` / `darwin` / `windows` / `any`. Eligibility filter. |
+| `gates[].target` | Which entry in `targets` this gate's verdict speaks for. Omitted ≡ the host it ran on, which is the common case; state it when they differ, as for a `wasm32` gate running on a Linux host. |
 | `gates[].host_arch` | Optional `amd64` / `arm64` filter — lets a project target "linux arm64" separately from "linux amd64" without a target-triple grammar. Omitted ≡ any. |
 | `gates[].timeout` | Duration (`30m`, `2h`). Bounds *work*, not queue wait — [invariant 3](#3-serialization-is-declared-and-waiting-for-it-is-not-work). |
 | `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
