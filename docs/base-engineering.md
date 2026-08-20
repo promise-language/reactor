@@ -62,6 +62,33 @@ has exactly one answer. The manifest's `allow_dirty_tree` already expresses this
 granularity; this is the same invariant at step granularity, checked by Reactor as a step
 postcondition rather than left to the flow to honor.
 
+#### One delivery path per step
+
+A step that can hand back its work three ways — files left in the worktree, changes staged, or a
+commit — has three success paths and rather more than three failure paths, and the combinations
+multiply the moment a step runs twice. Left in the tree or staged, the work also violates this
+invariant outright, so the extra routes were never legitimate.
+
+> **Each step delivers its result exactly one way.**
+
+For `implement`, that way is **a single commit on the item's branch, amended on every subsequent
+run.** Amending rather than appending is what keeps the artifact one shape no matter how many
+attempts it took: "which of these commits is the implementation" stops being a question anyone has
+to answer. Progress remains visible because the commit *hash* changes, and the ledger keeps the
+prior hashes even though the branch tip no longer points at them.
+
+Completion is then a predicate anyone can check, which is what
+[invariant 6](#6-a-steps-completion-is-a-verified-artifact) requires of it:
+
+> **`implement` is done when the item's branch carries one new commit, the worktree is clean, and
+> the push-blocking gate set is green.**
+
+**One consequence to make explicit:** amend-based delivery requires a force-push to the item's
+branch. That is safe there — nothing downstream builds on a work branch, which is why
+[invariant 1](#1-origin-is-always-green-on-every-platform) does not gate `push:branch` — but it must
+be impossible on trunk. So `push:branch` permits a non-fast-forward push and `push:origin` never
+does, and the two must not be collapsed into one grant.
+
 #### Invariants and properties are enforced differently
 
 Some things must never be in the tree at all — a committed binary, a secret, a suppression tag like
@@ -561,8 +588,9 @@ and `projects/tracker/`. The work is less "create a repo" than "name the layer t
 per-project halves out, and port it to Promise".
 
 **One repo, several modules.** Subdirectory module addressing
-([P12](design.md#platform-requirements--requested-of-promise), resolved in trunk) puts the subpath
-on the *named* require entry, so several entries may point at one URL with different subdirs. That
+([P12](design.md#platform-requirements--requested-of-promise), landed in head and shipping with the
+next release cut) puts the subpath on the *named* require entry, so several entries may point at one
+URL with different subdirs. That
 is what makes consolidation work rather than merely tolerable: Reactor depends on the wire types
 alone, a flow on the wire types plus the common library, and a project's gate on the gate SDK alone,
 none of them pulling the others into their compilation.
@@ -981,7 +1009,7 @@ point head-only and every-commit are the same thing and the question stops exist
 | `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
 | `gates[].schedule` | Monitor cadence: `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. Omitted ≡ never scheduled (a pure precondition). |
 | `gates[].serialized_by` | Named exclusions this gate needs, each `<scope>:<leaf>` with scope in `project` / `host` / `arena` / `global`. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
-| `gates[].allow_dirty_tree` | Skip the post-run clean-tree check. |
+| `gates[].allow_dirty_tree` | Tolerate **untracked** residue after the run — build output in an ignored directory, say. Never licenses modifying tracked content; see [A gate never modifies the tree](#a-gate-never-modifies-the-tree). |
 | `gates[].tags` | Free-form; attached to auto-filed bugs. Also the selector for verify subsets (`verify --tags wasm`). |
 | `gates[].metrics[]` | One spec per metric the gate emits. |
 
@@ -1033,6 +1061,36 @@ constrains **resolution logic**, which must live outside the worktree because fi
 would contend with the work in flight. A fixer is not resolution logic; it is a tool the flow
 invokes, exactly as it invokes the compiler, and what it does is defined by the tree's own
 configuration. Deciding *when* to run it stays outside, with the flow.
+
+### A gate never modifies the tree
+
+"A gate measures the tree" is stated as the reason gates come *from* the tree. It is also a
+constraint on what a gate may *do*, and that half has to be enforced rather than assumed — a
+formatting gate that formats, rather than reporting, is the obvious way to get it wrong, and it is
+worse than it looks because the formatter is itself a tool in the tree. The thing being measured
+and the thing doing the measuring start changing each other.
+
+> **A gate may not modify tracked content. Not as a side effect, not as a convenience, not to fix
+> what it found.**
+
+Remediation belongs to the [`fix` command](#the-checkfix-pair), invoked by the flow as a step, never
+by the gate runner. A gate that repairs what it measures destroys the only signal it exists to
+produce: a green result no longer distinguishes "was correct" from "was made correct", and the
+change it made is attributed to nobody.
+
+**Enforced at two layers**, in the design's usual shape — preventive where the platform allows,
+detective everywhere:
+
+- **A read-only worktree mount** for the gate's process, which is already named as a [sandbox choke
+  point](design.md#where-it-is-enforced). Where available this makes the rule unbreakable rather
+  than merely stated.
+- **A post-run check that no tracked file changed**, which is portable and catches what the sandbox
+  cannot.
+
+**This narrows `allow_dirty_tree`.** It exists so a gate that legitimately drops build output into
+an ignored directory is not failed for it — *untracked* residue, which the tree's own ignore rules
+already describe. It never licenses modifying tracked content, and a gate that needs to is not a
+gate.
 
 ### verify is derived, not declared
 

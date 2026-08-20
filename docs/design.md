@@ -1084,6 +1084,36 @@ Three rules keep that from becoming a slower runaway:
 answerable — this run either produced a verified artifact or it did not. Per-item budgets remain, as
 the outer bound; they are not fine enough to tell a hard step from a stuck one.
 
+### Running out is a wind-down, not a kill
+
+Terminating a step the instant its grant is exhausted is how a system loses the work it already paid
+for. Anything the agent had not yet written durably is gone, and the tree can be left half-changed —
+so the cheapest moment to stop is also the moment with the most to lose.
+
+> **At exhaustion: ask for an extension. If refused, instruct the step to wind down, with a reserved
+> allowance to do it. If it does not stop within the grace period, escalate to a hard kill.**
+
+- **Wind-down has a narrow meaning, and it is not "finish the task."** It is *reach a verifiable
+  artifact* — [invariant 6](base-engineering.md#6-a-steps-completion-is-a-verified-artifact) — or
+  failing that, leave the tree in a state the next attempt can start from. That is achievable in a
+  bounded window in a way "complete the work" is not.
+- **The wind-down allowance sits outside the grant**, because otherwise the instruction is
+  unfundable: an agent cannot be told to spend nothing and also write down what it did. A small
+  reserve, spent only on stopping, is what makes the graceful path exist at all.
+- **The hard kill is not optional.** A step that will not stop is
+  [escalated exactly like a deadline](#nothing-runs-unwatched) — graceful signal, grace period, hard
+  kill of the process group, confirm reaped — because a wind-down that can be ignored is a
+  perpetual stall wearing a politer name. **Never-stall outranks the work.**
+- **What the kill costs is bounded by the arena**, not by the grant. The worktree and everything
+  else the step accumulated stay where they are under
+  [invariant 4](base-engineering.md#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward),
+  so a killed step is resumable rather than lost. That is what makes the hard kill affordable to
+  reach for.
+
+The order matters: extension first, wind-down second, kill last. Reversing the first two spends a
+human decision on a step that only needed thirty more seconds, and skipping the second is the
+current behaviour that loses work.
+
 **A grant is not a quota, and the two must not be conflated.** A grant bounds what *this item* may
 spend and is a judgment about the work; an account's [quota](#quota-is-estimated-never-known) bounds
 what the *deployment* has left and is a fact about the world. Running out of grant asks whether to
@@ -1382,13 +1412,13 @@ value is knowing nothing — so they are the better ask.
 | P9 | `schema` | design only | manifest and API payload validation; hand-written validators meanwhile |
 | P10 | `--target` cross-compilation | planned (runtime-architecture phase 7e) | collapses the runner/governor/flow release matrix to one build job; a native CI matrix works meanwhile. Matters more for flows, whose matrix multiplies per project |
 | P11 | Tool-source-directory discovery + compile caching | see [promise-forge.md](promise-forge.md) | replacing the Go `./make` blueprint with `promise run <tool-dir>` |
-| P12 | Addressing a module in a repo **subdirectory** | **resolved in trunk** — `subdir` on `[require.NAME]`; not yet in `next` or `stable` | granular modules out of one BASE repo — wire types, gate SDK, and flow library each addressable on their own |
+| P12 | Addressing a module in a repo **subdirectory** | **landed in head** — `subdir` on `[require.NAME]`; ships with the next release cut | granular modules out of one BASE repo — wire types, gate SDK, and flow library each addressable on their own |
 | P13 | Partial clone for remote modules | `git clone --bare`, full history, no `--filter` | any remote dependency pulls the entire repo and its history |
 
-**P12 — subdirectory modules: resolved in trunk**
-([promise#30](https://github.com/promise-language/promise/issues/30)), and not yet promoted to
-`next` or `stable` — so BASE can be laid out for it now, but nothing pinned to a released channel
-can consume it until it ships.
+**P12 — subdirectory modules: landed in head**
+([promise#30](https://github.com/promise-language/promise/issues/30)), shipping with the next
+release cut — so BASE can be laid out for it now, and nothing pinned to a released channel can
+consume it until that cut happens.
 
 The subpath lives on the **`[require.NAME]` entry** rather than in the location string, and the
 `repo//subdir` spelling other ecosystems use is rejected at parse time — such a URL normalizes to
