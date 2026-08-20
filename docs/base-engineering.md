@@ -347,11 +347,68 @@ and by ratcheted baselines, and never authorizes anything by itself. A widened c
 authorizes silently and immediately. The two failure modes are not comparable, so the two things get
 different homes.
 
-Costs, stated plainly: two repos per project, cross-repo version pinning between a companion repo
-and the flow common library, and Reactor needing configuration to find each project's companion.
-The pinning is ordinary Promise remote-module resolution, and each companion repo carries
-`promise.toml` at its root — so this layout needs no new language feature
+Costs, stated plainly: two repos per project, and cross-repo version pinning between a companion
+repo and the flow common library. The pinning is ordinary Promise remote-module resolution, and each
+companion repo carries `promise.toml` at its root — so this layout needs no new language feature
 ([P12](design.md#platform-requirements--requested-of-promise) becomes unnecessary for flows).
+
+### The `.base` directory — how a project names its setup
+
+A project and its companion repo have to find each other, and the obvious place to configure that
+is Reactor. That is the wrong place, for the reason
+[gate discovery](#no-manual-gate-registration) already gives: it makes a maintainer mirror project
+knowledge into the server, by hand, once per project. Having argued that for gates, leaving the
+project→companion mapping in server config would be the same mistake with a different noun.
+
+So the project carries it:
+
+> **`.base/` is a directory in the project repo holding a config file that names the project's BASE
+> setup** — which companion repo defines its process, and which Reactor deployment orchestrates it.
+
+**It is the second and last thing BASE mandates of a project**, alongside the gate-listing command.
+A directory rather than a bare file because more will want to live beside it, and because it matches
+how `.github/` and `.githooks/` already read.
+
+#### Declare, then authorize
+
+The pointer is not authority, but it *selects* authority — whoever controls `.base/` controls which
+companion repo's roles and grants apply. Left alone, an `implement` step could repoint it at a more
+permissive companion and widen itself, which is the self-authorizing bound this whole layout exists
+to prevent.
+
+The fix is the composition this design uses everywhere else:
+
+> **The project declares its companion; the deployment must have authorized that pairing.** Reactor
+> honors the pointer only when it matches a registration it already holds. Neither side may widen
+> the other.
+
+Same shape as [role ∩ step](design.md#authority-roles-steps-and-capabilities), as manifest ∩
+deployment overrides, as tenancy ∩ declared need. A rogue edit then fails closed — Reactor never
+authorized that pairing — and `.base/` belongs on the
+[protected-path deny-list](design.md#the-capability-vocabulary), so no step can write it at all and
+any diff touching it is loud. That makes `.base/` a discovery aid and a cross-check rather than a
+grant.
+
+#### Two rules about what goes in it
+
+**It names identity, never a version.** The flow version resolves
+[per step](#the-principle) precisely so an async fix reaches work already in flight. A `.base/` that
+pinned the companion's commit would fight that directly and reintroduce the contention the
+out-of-tree split exists to remove.
+
+**Pointers, never policy.** The hazard of a directory is accretion: someone adds a grant, then a
+role, and it quietly becomes the in-tree authority store that
+[the companion-repo argument](#why-per-project-base-definitions-get-their-own-repo) spends three
+points avoiding. Anything that *bounds* an agent belongs in the companion repo. If a
+thing in `.base/` would change what an agent may do, it is in the wrong file.
+
+#### Why a file rather than a field in the gate manifest
+
+The manifest already carries `project` and could carry the companion too, keeping the mandated
+surface at exactly one thing. But it is *emitted by a command*, and running that command needs the
+toolchain built. **Bootstrapping is circular**: you may need to know the BASE setup before you can
+produce the manifest that would have told you. A static file readable from a bare clone breaks the
+circle; a command cannot.
 
 ### Bounds are authority, not tooling
 
@@ -499,9 +556,12 @@ authority, not tooling](#bounds-are-authority-not-tooling).
 
 ### What BASE actually requires of a project
 
-**Exactly one thing: a command that enumerates the project's gates.** By convention `bin/gate list
---json`, emitting [the manifest](#gate-discovery--the-project-declares-reactor-discovers), plus the
-JSON envelope each gate writes. That is the entire mandatory surface.
+**Two things, and nothing else.** A command that enumerates the project's gates — by convention
+`bin/gate list --json`, emitting [the
+manifest](#gate-discovery--the-project-declares-reactor-discovers), plus the JSON envelope each gate
+writes. And a [`.base/` directory](#the-base-directory--how-a-project-names-its-setup) naming which
+companion repo defines the project's process and which deployment orchestrates it. That is the
+entire mandatory surface: one command, one config file.
 
 BASE deliberately never names `bin/format` or `bin/vet`, and it must not: [the polyglot
 boundary](#language) means a Rust project satisfies the same contract with `cargo fmt` and `cargo
