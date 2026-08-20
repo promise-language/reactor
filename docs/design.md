@@ -286,12 +286,12 @@ appear, and each addition has to answer the same question — what does this let
 
 | Resource | Capabilities |
 |---|---|
-| Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write · **routing** (`flow:` labels, assignee) |
+| Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write:own · **routing** (`flow:` labels, assignee) |
 | Source tree | read · write:`<glob>` (allow) minus `<glob>` (deny) |
 | VCS | commit · push:branch · push:origin · pr.create · pr.merge |
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
-| Deployment | config.read · config.write · secret:`<name>` |
+| Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` |
 | Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write |
 
 **The tool-surface row is not optional decoration.** Everything an agent reaches through its harness
@@ -370,7 +370,7 @@ flow describing itself and the other is the system constraining the flow.
 
 | | Declared by | Contents |
 |---|---|---|
-| **Operational** | the flow binary, via a `describe` command | item types, eligibility, `serialized_by`, fresh-session and arena-independent hints |
+| **Operational** | the flow binary, via a `describe` command | item types, eligibility, `serialized_by`, fresh-session and arena-independent hints, and how each step's artifact is [verified](base-engineering.md#6-a-steps-completion-is-a-verified-artifact) |
 | **Authority** | companion-repo config Reactor reads on its own | roles, step grants, capabilities, read scope |
 
 The split is not fussiness. A flow emitting its own grants would be the constrained party describing
@@ -1023,11 +1023,16 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   fleet-wide rather than per item.
 - **Every step's cost is metered and attributed** to item and step: tokens, wall time, arena time.
   Work that is not metered cannot be budgeted, and work that cannot be budgeted cannot be stopped.
-- **Budgets are per item and per deployment, in two currencies.** Subscription tokens and API spend
-  are not interchangeable — one is a scarce resource that expires, the other is money — so a budget
-  names both rather than collapsing them (see [Model
-  accounts](#two-currencies-not-one)). An item that exhausts either is parked for a human; it is not
-  retried harder. Quota exhaustion pauses rather than spinning against a limit.
+- **Budgets are grants that escalate, not ceilings that stop.** A fixed budget answers "how much
+  should this cost" — badly, since nobody knows in advance — and then gets used to answer "is this
+  still making progress", which it cannot answer at all. A genuinely hard item and a thrashing one
+  look identical to a spend counter, so a fixed budget stops the wrong ones, and repeatedly
+  stopping and restarting work that was progressing is itself a major source of instability. See
+  [the grant ladder](#the-grant-ladder) below.
+- **Budgets are metered in two currencies.** Subscription tokens and API spend are not
+  interchangeable — one is a scarce resource that expires, the other is money — so a grant names
+  both rather than collapsing them (see [Model accounts](#two-currencies-not-one)). Quota
+  exhaustion pauses rather than spinning against a limit.
 - **Loop detection is a first-class state.** The same step, on the same input digest, failing with
   the same signature N times means the item is *stuck* — it stops being dispatched and is surfaced.
   Stuck and known is a fine state; stuck and busy is precisely the failure this rule exists to
@@ -1046,6 +1051,50 @@ waiting on something that will never arrive *invisibly*, and parking is the oppo
 recorded state, with a stated reason, an owner, and a place it shows up in the admin UI. Deciding
 that an item cannot progress without a human, and saying so, is progress. Continuing to spend on it
 is not.
+
+### The grant ladder
+
+A spend limit and a runaway detector are different instruments, and using one for both is what makes
+a fleet stop work that was fine while letting work that was doomed run to the cap. Separate them:
+**the grant is a ceiling; the decision to extend it is a progress judgment made with evidence that
+did not exist when the item started.**
+
+> **Work inside its grant proceeds without asking. Work that would exceed it requests an extension,
+> which is decided rather than assumed. Above a hard ceiling, only a human may grant.**
+
+Three rules keep that from becoming a slower runaway:
+
+- **Extend only on evidence of progress.** A ladder with no progress predicate is a budget with
+  extra rungs, arriving at the same runaway later and more expensively. The predicate is
+  [invariant 6](base-engineering.md#6-a-steps-completion-is-a-verified-artifact): *has a new
+  verified artifact appeared since the last grant?* — not "has it spent less than X". That is the
+  same distinction [a resume is not a retry](#every-attempt-must-make-progress) draws for
+  interruption, applied to spend: what counts is whether this attempt could do something the last
+  one could not.
+- **Extension is a capability, not a policy setting.** `budget.extend:<limit>` is granted per role
+  like everything else: an automated policy extends to one bound, an admin further, and past the top
+  only a human. An extender that can raise its own ceiling is not a ceiling — the same
+  self-authorizing failure the whole authority model is built to exclude, and it applies with full
+  force here **because anything smart enough to judge a runaway is smart enough to cause one**.
+- **The hard ceiling is the deployment owner's**, held in
+  [ConfigStore](#configstore--the-deployment-owners-residual), out of reach of everything it
+  constrains.
+
+**The grain is the step run**, because that is the smallest unit where the progress question is
+answerable — this run either produced a verified artifact or it did not. Per-item budgets remain, as
+the outer bound; they are not fine enough to tell a hard step from a stuck one.
+
+**A grant is not a quota, and the two must not be conflated.** A grant bounds what *this item* may
+spend and is a judgment about the work; an account's [quota](#quota-is-estimated-never-known) bounds
+what the *deployment* has left and is a fact about the world. Running out of grant asks whether to
+extend; running out of quota is an
+[infrastructure failure](#infrastructure-failures-and-process-failures-are-different-things) that
+resumes on its own when the window resets. Treating the second as the first would ask a human to
+approve spending money that does not exist.
+
+An item waiting on a human grant is **parked**, by the paragraph above: recorded, owned, visible,
+and not spending. That is the case parking exists for, so the ladder needs no separate waiting
+state.
 
 ## Gate execution — Reactor's half
 
@@ -1095,6 +1144,35 @@ deliberate — without it, "detected and undone" is a claim the system does not 
 
 The manifest schema, the output envelope schema, and the project-side gate SDK are specified in
 [base-engineering.md](base-engineering.md).
+
+## Artifact verification — Reactor's half
+
+The project-facing rule is
+[invariant 6](base-engineering.md#6-a-steps-completion-is-a-verified-artifact): a step's completion
+is a durable artifact that declares how it can be checked. Reactor's half is that **the check
+actually runs, and runs somewhere the step does not control.**
+
+1. **Accept nothing unchecked.** A step reporting done submits its artifact; Reactor validates it
+   against the declared check *before* recording completion. This is the same discipline as the
+   [gate envelope](base-engineering.md#gate-output-envelope) — a subprocess emits a claim, the
+   server validates it, and the human-readable part is never what is trusted.
+2. **A failed check is a step outcome, not a fault.** The step is simply not done. It returns to
+   resolution carrying the failure as context, which is a better input than the one it had the
+   first time. Recording it as an error would misroute it to infrastructure-versus-process
+   [triage](#infrastructure-failures-and-process-failures-are-different-things), where it does not
+   belong: the work *was* evaluated, and the answer was "not yet".
+3. **Where the check runs follows what it reads.** A check over item state runs server-side; a
+   check over the tree runs on the arena holding it, and where the check *is* a gate run it is
+   scheduled, serialized, and budgeted as one. **Cheap and structural is worth designing for** —
+   "does this commit's tree contain the change", "is this patch non-empty *or* already in `HEAD`" —
+   because a check that costs as much as the step doubles the price of every completion.
+4. **Verification is billed to the step's grant.** It is work, not bookkeeping, and an unbilled
+   check is exactly the unbudgeted step the [grant ladder](#the-grant-ladder) exists to rule out.
+
+**Single-authorship is enforced here too.** Reactor rejects a write to an artifact the submitting
+step does not own, rather than trusting steps to stay in their lanes. Without that, one step's
+re-run can invalidate a neighbour's verified state, which destroys correct work and is invisible
+until something downstream needs it.
 
 ## Cross-project work — change sets and blocking edges
 
@@ -1176,6 +1254,25 @@ that, while remaining invisible to the project it waits on, and vice versa.
   exception is the rare case where an item becomes blocked while a step is interrupted mid-flight:
   that arena holds unrecoverable state, so the binding is kept and ranks first among victims under
   pressure.
+
+### Relocation is a link, not a closure
+
+Work discovered in one project whose fix belongs in another has to end up in the right queue, and
+how the *original* item ends matters as much as where the new one starts.
+
+> **An item whose work belongs elsewhere closes as `moved to <project>#<id>`** — a distinct outcome
+> from resolved and from declined, carrying a durable pointer to its successor.
+
+Without that distinction the two collapse, and the collapse is not cosmetic: an item closed for
+being in the wrong repo reads later as an item that was refused, so a wanted fix looks like a
+rejected one and the successor has no provenance. This is the item-level form of a rule the fleet
+already applies to processes — *termination always produces a verdict; nothing terminates into
+ambiguity, because an ambiguous outcome is what later becomes a stall.* A closure reason that has
+lost its meaning is that ambiguity, arriving months later and misleading whoever reads the history.
+
+The pointer is one-way and cheap: the successor need not know about its origin, which matters
+because the two projects may be mutually invisible under
+[read scope](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped).
 
 ### Serialization is per project, not per fleet
 
@@ -1329,8 +1426,8 @@ edges of process control are missing, and those are P14.
 > longer have to be redrawn. Two things gate the *start* rather than the shape: `promise run`
 > argument passing, without which no Promise dev tool can take arguments, and the promotion of P12
 > out of trunk. Neither affects the design, so the contract work — wire types, the gate output
-> envelope schema, and the flow `describe` schema — proceeds in parallel and is waiting when they
-> land.
+> envelope schema, and the flow `describe` schema including per-step artifact verification —
+> proceeds in parallel and is waiting when they land.
 
 ## Decisions locked
 
@@ -1406,4 +1503,12 @@ edges of process control are missing, and those are P14.
 - **Which pocket pays is the deployment's business, not the step's.** Subscriptions are ambient to
   an arena, API keys are injected by Reactor from admin config, and no account appears in a step
   declaration.
+- **A step's completion is a verified artifact** — durable, checked by the system before completion
+  is accepted, and writable only by the step that owns it. One author and one independent check is
+  what lets the artifact set be the only completion record.
+- **Budgets are grants that escalate, not ceilings that stop.** Extension is decided on evidence of
+  progress, is itself a capability with a per-role limit, and stops at a hard ceiling only a human
+  may raise. A spend counter cannot tell a hard item from a stuck one.
+- **Relocation is a link, not a closure.** An item whose work belongs in another project closes as
+  *moved to `<project>#<id>`*, distinct from resolved and from declined.
 - Build tooling is the **forge blueprint** (`./make`, `bin/verify`, ratcheted baselines, guard).

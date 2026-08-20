@@ -51,7 +51,7 @@ through, not the primary mechanism.
 warm local state for *correctness* — only for speed. That is what `preflight` is for, and a CI job
 that clones fresh and runs verify is the cheapest way to keep it true.
 
-### 2. A step's only output is commits, and the tree it leaves is clean
+### 2. A step changes the tree only by committing, and leaves it clean
 
 **A flow modifies the worktree through exactly one path: it commits.** At the step boundary the tree
 is clean — no stray files, no staged-but-uncommitted work, no build output.
@@ -276,6 +276,54 @@ than parking for a human, because the blocker is itself an item the fleet can re
 The stall becomes throughput. Reactor's half — change sets, the kinds of blocking edge, and what
 happens to the arena — is in
 [design.md](design.md#cross-project-work--change-sets-and-blocking-edges).
+
+### 6. A step's completion is a verified artifact
+
+Invariant 2 governs what a step leaves in the *tree*. This governs what it leaves on the *item*, and
+it is the difference between a completion record that can be trusted and one that merely exists.
+
+> **Every completed step leaves one durable artifact. The artifact declares how it can be checked,
+> the system checks it before accepting the step as done, and no step may write an artifact other
+> than its own.**
+
+Three clauses, and each closes a distinct failure:
+
+- **Durable**, or there is no record that survives an interruption, and completion has to be
+  re-derived by inspecting side effects.
+- **Verified by the system**, or a step is the sole and unchallengeable witness to its own
+  completion. That is not hypothetical: a step that records "I pushed commit X" without having
+  committed produces a *finalized* item whose work is gone — the worst available outcome, and the
+  hardest to notice, because every downstream reader sees a plausible record.
+- **Single-author**, or one step's re-run can flip a neighbour's verified artifact back to
+  incomplete, destroying correct and already-paid-for state.
+
+**Together they give each artifact one author and one independent check**, which is what makes the
+artifact set trustworthy as the *only* completion record. Without both, verification and
+single-authorship each fail in the other's absence: a verifiable artifact a neighbour may overwrite
+is not trustworthy, and an unforgeable artifact nobody checks is just a claim.
+
+#### Who declares the check, and who runs it
+
+The split is the one already drawn for [everything a flow
+says](design.md#what-a-flow-declares-and-what-is-declared-about-it). **The step declares how its
+artifact is checked** — that is an operational fact, best known by the code that produces it, and it
+travels with that code. **The system runs the check**, because a step trusted to verify itself is a
+flow limiting itself.
+
+A claimed completion that fails its check is **not an error**. The step is not done, and it is
+returned to resolution *with the failure as its context* — which is precisely the "why am I running
+again" input a step needs to do better on the second pass than the first.
+
+#### Verification has a cost, and it needs its own budget
+
+Some checks are cheap and structural: does this commit's tree actually contain the change, is this
+patch non-empty *or* already present in `HEAD`. Others are indistinguishable from running a gate —
+"the tests pass" is verified by running the tests.
+
+Expensive verification can be optimized but **cannot always be removed**, so it is budgeted as work
+in its own right rather than treated as free bookkeeping. A check billed to nobody is an unbudgeted
+step, which is the thing the [grant ladder](design.md#every-attempt-must-make-progress) exists to
+prevent. Where the check is a gate run, it is scheduled and serialized like any other gate.
 
 ## Two layers, often confused
 
