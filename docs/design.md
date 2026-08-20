@@ -127,9 +127,8 @@ Consequences:
   not accepted because two languages could not link.
 - **The wire types can be a shared Promise module.** Both sides speak the same language, so the
   protocol gets one definition used by server and flow client alike, instead of two hand-kept-in-sync
-  copies. That module needs a home, which is where the
-  [BASE-layer repo question](base-engineering.md) and
-  [P12](#platform-requirements--requested-of-promise) meet.
+  copies. That module's home is the [BASE layer repo](base-engineering.md), addressed as a
+  subdirectory module now that [P12](#platform-requirements--requested-of-promise) has landed.
 - **The GitHub client is written once, in Reactor.** With
   [no serverless variant](#no-serverless-variant), flows never talk to GitHub directly — they go
   through the Reactor API, and Reactor owns the only GitHub client.
@@ -1172,23 +1171,31 @@ value is knowing nothing — so they are the better ask.
 | P9 | `schema` | design only | manifest and API payload validation; hand-written validators meanwhile |
 | P10 | `--target` cross-compilation | planned (runtime-architecture phase 7e) | collapses the runner/governor/flow release matrix to one build job; a native CI matrix works meanwhile. Matters more for flows, whose matrix multiplies per project |
 | P11 | Tool-source-directory discovery + compile caching | see [promise-forge.md](promise-forge.md) | replacing the Go `./make` blueprint with `promise run <tool-dir>` |
-| P12 | Addressing a module in a repo **subdirectory** | remote modules must have `promise.toml` at the repo root | consuming a Promise module from a Go-primary repo (flow, forge) without giving it a root manifest |
+| P12 | Addressing a module in a repo **subdirectory** | **resolved in trunk** — `subdir` on `[require.NAME]`; not yet in `next` or `stable` | granular modules out of one BASE repo — wire types, gate SDK, and flow library each addressable on their own |
 | P13 | Partial clone for remote modules | `git clone --bare`, full history, no `--filter` | any remote dependency pulls the entire repo and its history |
 
-**P12 — subdirectory modules.** The containment semantics **already exist**: `CollectModuleSources`
-skips any subdirectory carrying its own `promise.toml`, and the docs name these "nested modules".
-What is missing is only *addressing* — there is no way to point a remote dependency at
-`<repo>/<subdir>`. So this is a resolver change, not a module-system redesign. The design question
-is where the subpath lives: in the location string (scales to N modules per repo, but needs an
-explicit separator, since "where the repo path ends and the subdir begins" is not inferable for an
-arbitrary git host) or as a field on the `[require]` entry (unambiguous, but one module per repo
-because the key is the repo URL).
+**P12 — subdirectory modules: resolved in trunk**
+([promise#30](https://github.com/promise-language/promise/issues/30)), and not yet promoted to
+`next` or `stable` — so BASE can be laid out for it now, but nothing pinned to a released channel
+can consume it until it ships.
 
-**Whether this is needed depends on repo layout.** Reactor and every flow share the wire types as a
-module, and the flow common library is itself a module consumed per project — so module addressing
-is on the critical path. A dedicated BASE repo with `promise.toml` at its root needs nothing new; a
-module in a subdirectory of a repo that is not itself a Promise module does. The
-[BASE-layer repo decision](base-engineering.md) therefore decides whether P12 is required at all.
+The subpath lives on the **`[require.NAME]` entry** rather than in the location string, and the
+`repo//subdir` spelling other ecosystems use is rejected at parse time — such a URL normalizes to
+exactly the identity of `url` plus `subdir`, so the two spellings would silently share a pin, a
+resolution slot, and an IR prefix. Module identity becomes `<normalized-url>//<subdir>`, giving each
+addressed module its own IR prefix and cache entry, while the bare repo and checkout stay keyed on
+`(url, commit)` so several subdir modules in one repo share a single fetch.
+
+**What it buys BASE.** Because the field is on the *named* require form, several named entries may
+point at one URL with different subdirs — so one repo can publish N independently addressable
+modules. That is what makes the single-BASE-repo decision work: Reactor can depend on the wire types
+alone, a flow on the wire types plus the common library, and a project's gate on the gate SDK alone,
+without any of them pulling the others into their compilation.
+
+**What it does not solve is P13.** Addressing is not fetching: a consumer that wants only the gate
+SDK still clones the whole repo with full history. Shared fetch amortizes that across modules taken
+from the same repo, but it does not shrink the first one — so keeping the gate SDK cheap for an
+outside project still depends on partial clone landing.
 
 ### Already sufficient
 
