@@ -51,6 +51,54 @@ through, not the primary mechanism.
 warm local state for *correctness* — only for speed. That is what `preflight` is for, and a CI job
 that clones fresh and runs verify is the cheapest way to keep it true.
 
+#### Choosing preventive per change
+
+Running the full matrix on every item is safe and caps throughput; running it on none is fast until
+a platform-divergent change lands. Neither is right, so **which mode a given item gets is a decision
+the item carries**, and it has three parts: a cheap floor that always runs, a predictor that
+escalates, and an automatic escalation once trunk is already red.
+
+**A cross-platform build always runs.** Not the test suite — just the build, on every supported
+platform. Platform-divergent code characteristically fails to *compile* elsewhere long before it
+fails a test, and a build is a small fraction of a full verify. This is the tier that catches most
+of the damage for very little of the cost.
+
+**A predictor escalates an item to the full matrix**, and the signal is narrower than it first
+appears. The dangerous change is not one that touches every platform — it is one that touches
+**a single variant of something that has several**, because the author sees and exercises only the
+variant they touched. That inverts the obvious heuristic, and it is what makes the failure mode so
+reliable: nothing in the change looks cross-platform.
+
+Signals worth deriving from the diff, all structural rather than stylistic:
+
+- it edits one platform variant of a module that has others
+- it changes an interface without moving every implementation of it
+- it touches a path whose gate history already records platform-specific failures — the ledger keeps
+  per-platform gate results, so this is a query rather than a guess
+
+**Decided at `plan`, escalated freely later, de-escalated only as a recorded exception.** Plan is
+where someone is already reasoning about the shape of the work, so it is the cheapest moment to ask
+the question; the actual diff can escalate what the plan underestimated. The asymmetry is
+deliberate — forcing the matrix on costs latency on one item, forcing it off is how a cascade
+starts.
+
+**Tune for precision, not recall**, because the two errors cost wildly different amounts. A false
+positive is one matrix run of latency. A false negative is a red trunk, a repair cycle, and every
+other item stalled behind the integration lock for the duration. Prefer few, structural,
+high-confidence signals and accept that some divergent changes slip through — the next rule bounds
+what that costs.
+
+**Once trunk is red, every landing clears the full matrix, automatically and with no flag.** This is
+damage control rather than prevention, but it is free: the [repair item already holds the
+integration lock](design.md#gate-execution--reactors-half), so nothing else can land regardless and
+the matrix costs no throughput that was available anyway. Without it the repair loop inherits the
+defect it is repairing — a one-platform fix for a one-platform break, verified on one platform,
+which is how a single divergent change turns into several rounds of breaking one platform to fix
+another.
+
+**All of this is optional per project.** A single-platform project needs none of it, and should not
+pay for the machinery.
+
 ### 2. A step changes the tree only by committing, and leaves it clean
 
 **A flow modifies the worktree through exactly one path: it commits.** At the step boundary the tree
