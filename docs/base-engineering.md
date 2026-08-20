@@ -83,11 +83,50 @@ Completion is then a predicate anyone can check, which is what
 > **`implement` is done when the item's branch carries one new commit, the worktree is clean, and
 > the push-blocking gate set is green.**
 
-**One consequence to make explicit:** amend-based delivery requires a force-push to the item's
+**One consequence to make explicit:** amend-based delivery requires a force-push to the claim's
 branch. That is safe there — nothing downstream builds on a work branch, which is why
 [invariant 1](#1-origin-is-always-green-on-every-platform) does not gate `push:branch` — but it must
 be impossible on trunk. So `push:branch` permits a non-fast-forward push and `push:origin` never
-does, and the two must not be collapsed into one grant.
+does, and the two must not be collapsed into one grant. Which branch that is, is not a choice the
+step makes — see below.
+
+#### Branches are mechanical, and there is exactly one per claim
+
+Branches created by judgment accumulate. Work gets done on one, nobody carries it further, and the
+repo fills with refs no process owns — which is why the current setup blocks branching outright and
+does everything on trunk. The fix is not to keep branching away from agents by convention; it is to
+take the decision away from anything that could decide differently.
+
+> **The branch name is a pure function of the claim. Nothing smart chooses it, and nothing smart
+> creates it.**
+
+A derived name buys three properties at once. Creation is **idempotent** — create-or-reuse, so a
+rerun cannot fork a second branch. The mapping is **total**, so a branch always has an owning claim
+and an owning claim always has exactly one branch. And because it is total, **orphans are
+enumerable**: any ref whose claim is gone is garbage by set difference, rather than something you
+hope did not accumulate.
+
+**Keyed on the claim, not the issue.** One issue can legitimately carry two resolutions — two
+contributors, two PRs, as [Single-issue work](#single-issue-work-first-class-prs) describes — so
+keying on the item alone would either collide those two or forbid a case the design already
+supports. The claim is already first-class, coordinated by assignee plus the lease ledger, so it is
+the natural key. **A PR item does not get its own branch**; it names the branch its originating
+claim created, which is what lets a review flow run against the PR item without creating anything.
+
+**The lifecycle needs an owner, or gating creation just moves the problem.** A branch is retired
+when its claim reaches a terminal state — merged, declined, abandoned, or
+[relocated](design.md#relocation-is-a-link-not-a-closure) — and the sweep that finds strays is the
+set difference above. An item that is
+[parked](design.md#every-attempt-must-make-progress) is not terminal and keeps its branch, because
+parked work is waiting, not abandoned.
+
+**What enforces it is the push, not the local repo.** A step with a shell can always run `git
+branch` locally, and preventing that is not worth attempting. It does not matter: a local ref that
+cannot be pushed dies with the
+[ephemeral arena](#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward). So
+`push:branch` is scoped to *the claim's own branch* — the same `:own` shape as `artifact
+write:own` — and creation proper is `branch.create`, a capability the mechanical path holds and no
+agent-driven step does.
 
 #### Invariants and properties are enforced differently
 

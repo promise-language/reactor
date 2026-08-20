@@ -288,7 +288,7 @@ appear, and each addition has to answer the same question — what does this let
 |---|---|
 | Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write:own · **routing** (`flow:` labels, assignee) |
 | Source tree | read · write:`<glob>` (allow) minus `<glob>` (deny) |
-| VCS | commit · push:branch · push:origin · pr.create · pr.merge |
+| VCS | commit · `branch.create` · push:branch:own (may be non-fast-forward) · push:origin (never) · pr.create · pr.merge |
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
 | Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` |
