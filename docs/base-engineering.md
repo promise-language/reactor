@@ -58,9 +58,13 @@ is clean — no stray files, no staged-but-uncommitted work, no build output.
 
 This is not hygiene. It is what makes every other enforcement layer well-defined: the post-hoc diff
 audit has a precise subject, the next step inherits no contamination, and "what did this step do"
-has exactly one answer. The manifest's `allow_dirty_tree` already expresses this at gate
-granularity; this is the same invariant at step granularity, checked by Reactor as a step
-postcondition rather than left to the flow to honor.
+has exactly one answer. The same postcondition applies at gate granularity, and Reactor checks it
+rather than leaving the flow to honor it.
+
+**What counts as clean is the tree's own business.** The check is that `git status` reports nothing —
+which permits build output in a directory the project already ignores, and permits nothing else. The
+ignore rules *are* the declaration of expected residue: versioned with the tree, reviewable in a
+diff, and the same one git, the gate runner, and the step-boundary check all read.
 
 #### One delivery path per step
 
@@ -1010,7 +1014,6 @@ point head-only and every-commit are the same thing and the question stops exist
       "blocks":          ["push:origin"],
       "schedule":        "every 4h",
       "serialized_by":   ["host:cpu"],
-      "allow_dirty_tree": false,
       "tags":            ["tests", "host"],
       "metrics": [
         { "name": "test_count",    "type": "int", "direction": "up",   "mode": "enforced",      "cap": 10000 },
@@ -1048,7 +1051,6 @@ point head-only and every-commit are the same thing and the question stops exist
 | `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
 | `gates[].schedule` | Monitor cadence: `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. Omitted ≡ never scheduled (a pure precondition). |
 | `gates[].serialized_by` | Named exclusions this gate needs, each `<scope>:<leaf>` with scope in `project` / `host` / `arena` / `global`. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
-| `gates[].allow_dirty_tree` | Tolerate **untracked** residue after the run — build output in an ignored directory, say. Never licenses modifying tracked content; see [A gate never modifies the tree](#a-gate-never-modifies-the-tree). |
 | `gates[].tags` | Free-form; attached to auto-filed bugs. Also the selector for verify subsets (`verify --tags wasm`). |
 | `gates[].metrics[]` | One spec per metric the gate emits. |
 
@@ -1126,10 +1128,20 @@ detective everywhere:
 - **A post-run check that no tracked file changed**, which is portable and catches what the sandbox
   cannot.
 
-**This narrows `allow_dirty_tree`.** It exists so a gate that legitimately drops build output into
-an ignored directory is not failed for it — *untracked* residue, which the tree's own ignore rules
-already describe. It never licenses modifying tracked content, and a gate that needs to is not a
-gate.
+**There is no opt-out, and an earlier draft's `allow_dirty_tree` is gone.** The case it existed for
+— a gate that legitimately drops build output somewhere — is already covered by the tree's ignore
+rules, so the field only ever duplicated a declaration that exists, is versioned with the code, and
+is read by everything else anyway.
+
+Worse, it licensed the failure it looked harmless against. **Untracked residue is how a gate goes
+green on state that a fresh clone will not have**, which is exactly what
+[invariant 1](#1-origin-is-always-green-on-every-platform) means by verify depending on no local
+state for correctness. Trunk then passes here and fails there, for reasons nothing recorded.
+
+Failing instead is the useful outcome: it forces the residue to be named in the ignore rules, where
+it is reviewable and travels with the tree — rather than waved through by a manifest flag that says
+*something* was left behind without saying what. **A step and a gate are held to the same
+postcondition**, and neither has an exemption.
 
 ### verify is derived, not declared
 
