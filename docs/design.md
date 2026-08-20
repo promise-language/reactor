@@ -1126,6 +1126,46 @@ An item waiting on a human grant is **parked**, by the paragraph above: recorded
 and not spending. That is the case parking exists for, so the ladder needs no separate waiting
 state.
 
+## Step execution — Reactor's half
+
+The flow-facing contract is
+[Step resolution](base-engineering.md#step-resolution--steps-dispatch-themselves). Reactor drives
+the loop, and four obligations fall to it.
+
+1. **Scan, do not plan.** For the item's role and type, walk the declared steps calling `check`,
+   `run` the first `unsatisfied` one, then re-enter the scan. Nothing is precomputed and nothing is
+   cached between dispatches, because the flow version may have changed under the item since the
+   last one.
+2. **`check` is launched without a model account.** The absence of the credential is the
+   enforcement; a `check` that wanted to spend could not. `run` gets the arena's ambient
+   subscription and, if the deployment allows,
+   [an injected API key](#which-pocket-pays-is-not-the-steps-business).
+3. **The grant is per `run`.** That is the grain at which the
+   [ladder](#the-grant-ladder) asks its question, because a run either produced a verified artifact
+   or it did not. A `check` costs no grant, which is the other half of why it must be cheap.
+4. **Record every scan decision, not just the step that ran.** This is the cost of removing the
+   plan and it must be paid deliberately.
+
+**On that last point.** A stored plan is a thing you can look at and ask *why is it doing that*.
+Self-dispatch replaces it with a path that exists only in hindsight, so the ledger becomes the only
+account of what happened: for each scan, every step consulted, its verdict, and the reason. Without
+that, a wrong traversal is unreproducible and the model's flexibility becomes its own failure mode —
+the same trade the design accepts elsewhere by insisting that
+[nothing terminates into ambiguity](#nothing-runs-unwatched).
+
+**Outcomes route to machinery that already exists.** `blocked` becomes a
+[blocking edge](#an-edge-names-a-target-and-a-condition-never-a-version) or a park, and releases the
+arena binding by the [clean-boundary rule](#an-arena-is-leased-to-an-item-not-to-a-step) since the
+reporting step completed. `handoff` makes the item eligible for a role that can run the next step
+and is recorded as such — never as completion, which would drop the work, and never as blockage,
+which would point remediation at a blocker that does not exist. `complete` finalizes.
+
+**One property to preserve from the model this replaces.** Its fixed budget-per-artifact is what
+stopped every runaway from becoming unbounded — a bound worth keeping even though the instrument
+changes. The [grant ladder](#the-grant-ladder) is that bound, re-expressed: a scan that re-resolves
+until satisfied, with no per-run grant behind it, would be a reliability regression however much
+cleaner it reads.
+
 ## Gate execution — Reactor's half
 
 The project declares its gates; **Reactor discovers, schedules, and executes them.** Reactor's
@@ -1541,4 +1581,9 @@ edges of process control are missing, and those are P14.
   may raise. A spend counter cannot tell a hard item from a stuck one.
 - **Relocation is a link, not a closure.** An item whose work belongs in another project closes as
   *moved to `<project>#<id>`*, distinct from resolved and from declined.
+- **Steps dispatch themselves; no per-item plan is stored.** The resolver scans declared steps,
+  `check` answers cheaply and without a model credential, `run` is invoked for the first
+  unsatisfied one, and the scan concludes with `complete` or `handoff`. A stored plan cannot
+  survive per-step flow version resolution, which the design already promises. *(Proposed — see
+  [Step resolution](base-engineering.md#step-resolution--steps-dispatch-themselves).)*
 - Build tooling is the **forge blueprint** (`./make`, `bin/verify`, ratcheted baselines, guard).

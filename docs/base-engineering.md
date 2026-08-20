@@ -893,6 +893,114 @@ Untrusted work is **bracketed by trusted gates**: a less-trusted role runs every
 pushing to origin (it produces a PR), and a trusted review either merges it, returns it to sender,
 or escalates to the human at the top of the trust ladder.
 
+## Step resolution — steps dispatch themselves
+
+> **Status: proposed.** This replaces a fixed step sequence whose completion the *flow* determined
+> by inspecting artifacts. What follows is the contract a flow implements; Reactor's half of it is
+> [Step execution](design.md#step-execution--reactors-half).
+
+### There is no plan
+
+**No per-item step plan is built, on the first run or any later one.** The resolver walks the flow's
+declared steps and asks each to resolve the item; the set that actually runs is not knowable until
+the item is resolved, because it depends on what is already true.
+
+The reason is not elegance. **The flow version resolves [per step](#the-principle)** — deliberately,
+so a flow bug found mid-resolution is fixed outside and picked up by that item's remaining steps.
+A stored plan cannot survive that: the moment the flow changes it names steps that may no longer
+exist, in an order that may no longer hold. A design that promises async flow fixes and also stores
+a plan has committed to keeping a cache coherent with a thing it explicitly allows to change
+underneath it. Self-dispatch has no cache to invalidate.
+
+It also makes resume trivial. Re-entering the loop needs no restored position, which is what
+[invariant 4](#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward) wants of a resumed
+step anyway.
+
+**"No plan" is not "no flow definition."** The flow still declares its steps, their order, and their
+eligibility — that is what [`describe`](design.md#what-a-flow-declares-and-what-is-declared-about-it)
+emits. What is removed is the per-item *instance* of that plan, not the shape it is drawn from.
+
+### The outcomes belong to three layers
+
+Flattening these into one list is what makes the protocol ambiguous, because they answer different
+questions.
+
+**`check` — is my postcondition already true?** Deterministic, reads artifacts, and cheap.
+
+| | Meaning |
+|---|---|
+| `satisfied` | my artifact exists and verifies; skip me |
+| `unsatisfied` | I have work to do |
+| `blocked` | I cannot even be evaluated until something else changes |
+
+**`run` — do the work.** Invoked only for the first `unsatisfied` step.
+
+| | Meaning |
+|---|---|
+| `advanced` | I produced my artifact; re-enter the scan |
+| `blocked` | rerun when *&lt;condition&gt;* — the same [edge vocabulary](design.md#an-edge-names-a-target-and-a-condition-never-a-version) used across projects, plus "a human answered" |
+
+A `run` that produces no artifact is **not an outcome**. The step is simply not done, and
+[invariant 6](#6-a-steps-completion-is-a-verified-artifact) returns it to resolution with the
+verification failure as context.
+
+**The scan — what happened to the item.** These are the resolver's conclusions, not any step's:
+
+| | Meaning |
+|---|---|
+| `complete` | every declared step is satisfied; the item is resolved |
+| `handoff` | the next unsatisfied step exists but **this role may not run it** |
+
+**`handoff` is the outcome most easily lost, and losing it is expensive.** A contributor scanning
+reaches `merge` and stops. That is neither completion nor blockage: folding it into the first
+silently drops work, and folding it into the second sends remediation after a blocker that does not
+exist. It is also how the trust ladder actually advances — *bracketed by trusted gates* is this
+outcome, mechanized.
+
+### `check` and `run` are separate for a reason that is enforceable
+
+If a satisfied step answers by starting an agent to conclude "I was already done", a scan across
+five satisfied steps costs five agent sessions. Keeping the *judgment* with the step while making
+the *scan* cheap needs two entry points rather than one.
+
+> **`check` runs with no model account injected.** It cannot spend tokens however it is written.
+
+That is [credential scoping](design.md#where-it-is-enforced) rather than a convention a step is
+asked to honor — the same reason nothing else here is left to good behaviour. It also forces
+`check` to stay what it should be: a deterministic read of durable state.
+
+### Context is assembled, never accumulated
+
+A step's context — what earlier steps produced, what previous runs of *this* step did, and why it is
+being run again — is **derived from the durable artifacts at dispatch**, not carried forward from
+run to run. That bounds growth, and it means a resumed step reconstructs identical context from the
+record rather than from anything that died with its process, which is what
+[invariant 4](#4-an-items-work-binds-to-an-arena-and-carries-its-state-forward) already assumes.
+
+### Termination
+
+- **Forward only.** A step may report satisfied and let the scan continue past it; it may never send
+  the scan backward. With the declared order fixed and the step count finite, a scan terminates.
+- **Progress is a new verified artifact**, which is the same predicate the
+  [grant ladder](design.md#the-grant-ladder) extends on. A `run` that produces none did nothing the
+  previous attempt had not, and that is the ordinary
+  [loop-detection](design.md#every-attempt-must-make-progress) case — park it rather than trying
+  harder.
+
+### What this fixes, and what it does not
+
+Worth stating plainly, because the change is easy to oversell.
+
+**It fixes** the class where a step's own view of completion and the flow's bookkeeping disagree —
+a step that cannot satisfy an artifact predicate the flow imposed on it, and a step that reports
+done while the flow's record says otherwise. That class regenerates: individually patchable
+instances of it recur for as long as the judgment lives outside the step.
+
+**It does not fix** a step that reports completion falsely (that is invariant 6), non-idempotent git
+handling, a wall-clock budget racing work whose cost the step does not control, or a killed process
+leaving a live child. Those are real and they are orthogonal; a redesign that claimed them would be
+taking credit for other people's fixes.
+
 ## Gate discovery — the project declares, Reactor discovers
 
 Tracker required each gate to be entered by hand into server config (name, command, schedule, host
