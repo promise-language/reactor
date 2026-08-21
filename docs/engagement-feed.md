@@ -1,8 +1,7 @@
 # Proposal: the engagement feed
 
-> **Status: draft.** Moved from `flow` and adapted to Reactor's design. The durability, authority,
-> and role rules below are settled;
-> **[#4](#open-4--an-expiring-question-must-decide-not-vanish) is open** and marked inline.
+> **Status: draft.** The design questions are settled; what remains is
+> [configuration and one dependency](#open-questions).
 >
 > **Related:** [design.md](design.md) · [base-engineering.md](base-engineering.md)
 
@@ -186,7 +185,7 @@ fresh `created_at`.
   "actions": [ ],
 
   // Ranking inputs the creator can honestly know. Everything else is computed.
-  "impact":         50,               // stakes if this goes wrong. Anchors: 12.5 / 25 / 50 / 100
+  "impact_hours":   8,                // work-hours at risk if this goes wrong. 1 / 8 / 40 / 200
   "attention_cost": "1m",             // flow:duration; omitted = derived from the primary action kind
 
   // Audience and grouping — structured, not free text.
@@ -207,7 +206,7 @@ fresh `created_at`.
 | `title` / `description` | card headline and markdown body. |
 | `media` | ordered attachments; the first is primary. |
 | `actions` | the calls to action (see [Action](#action--the-calls-to-action)). |
-| `impact` | how bad it is if this goes wrong. Scales the ranking terms; it is **not** the score. |
+| `impact_hours` | **work-hours at risk** if this goes wrong. Scales the ranking terms; it is not the score. |
 | `attention_cost` | expected human minutes to dispose of it. Omitted ≡ derived from the primary action kind. |
 | `audience` | routing — whose feed it ranks into. **Not a permission.** |
 | `tags` | advisory display/filter facets. |
@@ -228,10 +227,25 @@ defeat the open-extension goal:
 2. **Canonicalize on ingest.** Author-supplied identifiers are lowercased, kebab-cased, and trimmed
    before storage. Tags additionally take a `namespace:value` shape (both `[a-z0-9-]+`) so related
    labels cluster under a known facet.
-3. **Registry, not enum; advisory, not behavioral.** The legal set of `component` values, audience
-   roles, and tag namespaces lives in a **Reactor-owned registry** — seeded with the built-ins and
-   extended by config/registration, not a code change. Reactor **never branches behavior** on any of
-   them; they drive attribution, grouping, and filtering only.
+3. **Registry, not enum; advisory, not behavioral.** Two registries — `component` values and tag
+   namespaces — live in a **Reactor-owned registry**, seeded with the built-ins and extended by
+   config/registration, not a code change. Reactor **never branches behavior** on either; they drive
+   attribution, grouping, and filtering only.
+
+   **Audience roles are not one of them.** The feed
+   [consumes the system's role vocabulary](#audience-and-tags) rather than registering its own, so
+   there is nothing to seed and nothing that can drift out of step with the authority model.
+
+   Seeds are deliberately small. `component` is **`flow` · `gate` · `reactor`** — exactly the three
+   things that talk to the Reactor API, so the set is derived from the seam model rather than
+   invented. Tag namespaces are **`topic:` · `area:` · `severity:`**; anything naming the project,
+   item, or gate duplicates what `source` and `key` already carry.
+
+   **Component says who posted; `key` says what it is about.** Filtering by subject — *show me
+   every open question* — comes from display facets Reactor derives from key structure
+   (`item:*:question`), which is free and needs no registry. Those facets are **display only,
+   never behavior**, exactly like tags: a key that does not follow the convention loses a chip and
+   nothing else.
 
 ### A degraded path is never a silent path
 
@@ -257,7 +271,7 @@ registered or the last referent ages out.
 
 ```jsonc
 {
-  "component": "gate",          // registered id: flow | gate | item-question | item-concern | reactor | <registered>
+  "component": "gate",          // registered id: flow | gate | reactor | <registered>
   "name":      "build-time",    // flow/gate/breaker name — stamped by the channel, canonicalized
   "item_id":   "T0481",
   "agent":     "verifier-1",
@@ -362,20 +376,33 @@ The always-available implicit **Dismiss** is independent of any action's `after`
 These are the two ranking inputs a creator can honestly know. Everything else the ranker needs is
 either measured (time) or computed from state the creator cannot see (what is blocked behind it).
 
-**`impact` is the stakes if this goes wrong** — not the score, and not a request for position in the
-list. Any positive number is valid; named anchors on a 0–100 scale mean an emitter rarely types a
-bare number:
+**`impact_hours` is the work at risk if this goes wrong** — not the score, and not a request for
+position in the list.
 
-| Anchor | Weight |
+> **Denominating it in real units is what makes the whole model interpretable.** A bare 0–100 weight
+> produces a score whose absolute value means nothing, so the fold is an ordering artifact and
+> "impact was 50" is a claim nobody can be wrong about. In work-hours, `rank` becomes a literal rate
+> — **work-hours saved per minute of human attention** — which is the white paper's thesis made
+> computable, and "we lost forty hours to that default" is a claim calibration can check.
+
+| Anchor | Meaning |
 |---|---|
-| Low | 12.5 |
-| Medium | 25 |
-| High | 50 |
-| Critical | 100 |
+| 1 | trivial — an hour's rework |
+| 8 | a day |
+| 40 | a week |
+| 200 | a month |
 
-The levels double each step, and the absolute scale is arbitrary — only ratios affect ordering. The
-numeric form drops an enum→weight lookup and lets a creator sit *between* anchors when "higher than
-a normal high, below critical" is the honest intent.
+Any positive number is valid and the anchors are only reference points, so an emitter can say `3`
+or `60` when that is the honest estimate. **Numeric only** — no name sugar on the wire: names would
+resolve against deployment config, so the same emitted article would mean different things in
+different fleets, and a union type is permanent under additive-only evolution.
+
+**Money folds in by a deployment rate, and both stay visible.** Spend genuinely at risk — API budget
+already committed to work that a wrong answer discards — converts to hours at a configured rate for
+*ordering only*. Every card shows the components unscalarized (*"blocking 11 items · ~40 work-hours
+at risk · $120 agent spend"*), because [two currencies, not
+one](design.md#two-currencies-not-one) refuses to hide the tradeoff being managed — and ranking
+needing a single number is not a reason to stop showing both.
 
 **`attention_cost` is the expected human minutes to dispose of it** — and it is a first-class
 ranking input, not metadata. A one-click choice is a minute; *"review this design proposal"* is
@@ -466,7 +493,7 @@ opposite — [spend as little human attention as possible](../WHITEPAPER.md) —
 Say that plainly and the ranking function is forced, and it is not importance:
 
 ```
-rank(a, t) = regret(a, t) / attention_cost(a)
+rank(a, t) = regret(a, t) / attention_cost(a)        // work-hours saved per minute of attention
 ```
 
 **The denominator is not decoration.** A `Critical` item needing an hour may deserve to rank *below*
@@ -488,15 +515,17 @@ regret(a,t) = blocked_value(a,t) × accrual_rate        // accrual
 | **Irreversibility** | ~zero, then a **cliff** | a window closing — a default fires, or work is wasted |
 | **Obsolescence** | monotonically → **zero** | information whose usefulness is expiring |
 
-`impact` is not a fourth term — it **scales** the first two. *How bad is this* and *how fast is it
-getting bad* are different questions, and a single priority number answers neither.
+`impact_hours` is not a fourth term — it **scales** the first two. *How bad is this* and *how fast
+is it getting bad* are different questions, and a single priority number answers neither. Every term
+is in work-hours, so `regret` is too, and the rate the ranker produces is one a human can argue
+with.
 
 **Decay is not a mechanism here; it is what zero regret looks like.** News sinks not because it is
 old but because the cost of not reading it approaches zero. A red gate stays up because its cost of
 inaction is constant or growing. A deadline question is quiet, then loud, because its
-irreversibility term is a cliff. **Three behaviours, one quantity, no flags** — no decay constant to tune, nothing
-to pin above the fold, no floor to configure. A design that needs those is one where regret is not
-being modelled, and each of them is a patch over the term that is missing.
+irreversibility term is a cliff. **Three behaviours, one quantity, no flags** — no decay constant
+to tune, nothing to pin above the fold, no floor to configure. A design that needs those is one
+where regret is not being modelled, and each of them is a patch over the term that is missing.
 
 ### Downstream weight is computed, never declared
 
@@ -511,8 +540,10 @@ blocking eleven transitive items with real spend already sunk into them ranks it
 work that [trunk-red preemption](design.md#gate-execution--reactors-half) already does for
 landings, generalized.
 
-The same rule bounds the obvious gaming: declared `impact` will inflate, so **compute what can be
-computed** and accept declarations only for what genuinely cannot be.
+The same rule bounds the obvious gaming: declared `impact_hours` will inflate, so **compute what can
+be computed** and accept declarations only for what genuinely cannot be. A real unit helps here too
+— inflating "impact 50 → 100" is costless, while claiming a question puts a month of work at risk is
+a statement that reads as false to anyone looking.
 
 ### The fold is a budget line, not a threshold
 
@@ -526,6 +557,17 @@ a better use of the next minute**, never on an absolute number.
 Feed length then adapts to bandwidth: the same human with ten minutes and with two hours gets two
 different, both correct, lists. Everything past the line is still reachable — it is a fold, not a
 deletion.
+
+**The budget is a per-role default in
+[ConfigStore](design.md#configstore--the-deployment-owners-residual), overridable by the reader for
+a session.** Declared data rather than inference, and since the budget moves only the fold and never
+the ranking, a wrong value costs one *"show more"* click — which is the right price for not
+guessing at someone's day. Observed session length can calibrate the default later, under the same
+bounds as every other estimate here.
+
+**The top-ranked article always shows, even if it alone exceeds the budget.** Otherwise the most
+consequential item becomes permanently invisible to the busiest reader, which inverts the whole
+point.
 
 ### Seeing something once is a delivery guarantee, not a ranking input
 
@@ -544,7 +586,7 @@ Conflating the two is how a trivial new notice outranks a question that is about
 | dismissed without acting | regret over-estimated, or mis-routed |
 | read, not acted, returned later | `attention_cost` underestimated |
 | expired or defaulted unseen | under-ranked, or the budget was genuinely exhausted |
-| a source's articles consistently dismissed | that **source's** declared `impact`, discounted — per source, never per article, and reported rather than applied silently |
+| a source's articles consistently dismissed | that **source's** declared `impact_hours`, discounted — per source, never per article, and reported rather than applied silently |
 
 > **Feedback tunes the inputs. It must never touch what is being optimized.**
 
@@ -553,7 +595,28 @@ resembles. A social feed's loop optimizes engagement, which is why social feeds 
 useless. **Here, more engagement for the same outcome is a worse feed.** The success metric is
 *attention spent per decision correctly made*, minimized — and the ground-truth loss is **decisions
 that expired or defaulted which the human, shown them later, would have decided differently.**
-Expensive to collect, and the only honest signal; everything in the table above is a proxy for it.
+Everything in the table above is a proxy for it.
+
+#### Collecting the ground truth without spending what it saves
+
+Two sources, because the free one is not enough on its own:
+
+- **Reversals cost nothing.** A default that fires and is later undone — the question reopened, the
+  work reverted, a bug filed against it — is ground truth with no attention spent and no new
+  surface. Honest, but sparse and lagging, and blind to a default that was wrong and nobody caught.
+- **Sampled review, under a bounded allowance.** A small configured share of the attention budget
+  (start at 5%) funds asking a human, retrospectively, whether a sample of fired defaults would have
+  gone the other way — **spent only from budget the ranked feed did not consume**, so calibration
+  can never displace real work.
+
+**The allowance is necessary rather than tidy, because a calibration prompt has zero regret by
+construction.** Nothing is blocked on it and no window closes, so under `rank = regret /
+attention_cost` it would never surface and the model could never learn. Making it just another
+article is the one place this design cannot self-apply — and the honest fix is an explicit, capped,
+visibly-labelled allowance rather than a fictional regret term inflated until it ranks.
+
+That it is calibration must be stated on the card. It spends human attention on improving the
+system rather than on the work, which a deployment is entitled to decline outright.
 
 ### What v1 actually needs
 
@@ -564,8 +627,8 @@ Less than the model suggests — two small constants tables and one graph query:
 | `blocked_value` | one graph query — Reactor already owns the graph |
 | window / `remaining` | already on the article |
 | `attention_cost` | the defaults table above, calibrated from observed time-to-action |
-| `P(default wrong)` | a constant per question kind, calibrated later |
-| `impact` | declared, discounted by source calibration |
+| `P(default wrong)` | a constant per question kind, calibrated from reversals and sampled review |
+| `impact_hours` | declared, discounted by source calibration |
 
 **The honest risk:** a bad `attention_cost` estimate is worse than none, because it buries or floods
 a whole class at once. So estimates are bounded — no calibration may move an article more than an
@@ -675,6 +738,105 @@ enumerating them.
 Every action taken is recorded with principal, article key, source, and operation — the same habit
 as [every reclamation is recorded](design.md#every-exclusion-is-held-by-a-process-never-by-a-flag).
 
+## Questions with deadlines
+
+A question is raised in one of two modes: **pinned** — *"I am blocked until you answer"* — or
+**defaulted** — *"here are N answers, I recommend X; if you do not answer by Y, I take X."* The
+second is the one that can quietly remove the human, so it carries the structure.
+
+### Two clocks that are easy to confuse
+
+> **An article's `expires_at` never decides anything.** The decision deadline lives on the question
+> annotation, and Reactor fires it from durable state.
+
+The article is a projection; its expiry is feed hygiene, and if the question is still parked the
+[reconcile pass](#two-article-classes) brings it back. Driving a decision from an article's lifetime
+would mean wiping the feed changed what the fleet decided, which
+[feed-held state is an optimization, never authority](#feed-held-state-is-an-optimization-never-authority)
+forbids outright.
+
+### Policy maps the kind; the step declares only what it is asking
+
+> **A question's *kind* determines both who may answer it and how long they have.** The step
+> declares the kind. It sets neither.
+
+`answerable_by` from policy is what stops a step laundering authority by calling a design decision
+routine. The window comes from the same place for the same reason: **a step choosing its own
+deadline is choosing how long its supervisor gets**, and a floor does not fix that, because a step
+can always propose exactly the floor. A step that needs a faster answer says so by declaring a kind
+that has one, and the kinds are policy-defined — in companion-repo config,
+[where the agents they constrain cannot reach them](design.md#the-capability-vocabulary).
+
+**The preference window must be shorter than the answer window.** A question
+[addressed to a named principal](#audience-and-tags) sits only in their feed until the preference
+lapses, so a preference outliving the deadline means the role never got a chance. Reactor rejects
+the pairing — the same class of static check as
+[refusing an unsatisfiable exclusion set up front](design.md#exclusions-are-declared-and-waiting-for-one-is-not-work).
+
+### What firing looks like
+
+When the window elapses, Reactor:
+
+1. Writes the **answer annotation** — `selection = <the recommendation>`, `author = system`,
+   `arrival_path = default-fired`, plus the **delivery accounting**: how long the question was
+   deliverable, and that the window elapsed.
+2. Clears the park, so the resolver re-scans and the step resumes from its checkpoint plus the
+   answer.
+3. Records the question as **`defaulted`, never `answered`.**
+
+Point 3 is not bookkeeping. *"The human chose the recommendation"* and *"nobody looked"* produce an
+identical selection and must stay distinguishable forever, because the second is the ground-truth
+loss signal the [whole ranking model calibrates against](#collecting-the-ground-truth-without-spending-what-it-saves).
+
+### The clock runs on delivery, not on creation
+
+A deadline on a person is only fair if the question reached them. The test is the one the design
+already uses for [infrastructure versus process failure](design.md#infrastructure-failures-and-process-failures-are-different-things)
+— *was the work ever evaluated?* — not whether the human engaged:
+
+> **Delivered = at least one principal holding the required role could see the question, through a
+> healthy surface.** The clock runs while that holds and pauses while it does not.
+
+- **A read receipt is not delivery.** A human who never opens the detail view never "reads" it, so
+  the clock would never start and the defaulted mode would silently become the pinned mode.
+- **A human being absent is not a delivery failure.** That is precisely the case the defaulted mode
+  exists for. Only the system's own failure to present buys time back.
+- **The pause conditions are ones already detected**: the required role has no live principal, the
+  article is mis-routed to an unregistered role, or every configured surface is degraded. Those are
+  exactly the [faults the degraded-path rule already raises](#a-degraded-path-is-never-a-silent-path)
+  — one list, two uses.
+- **Per surface, not all surfaces.** If the feed is up and the code host is down, the question is
+  still in front of people who can answer; the clock runs. It pauses only when *every* surface is
+  failing, or degrading one mirror becomes a way to stall the fleet.
+- **Pause and accumulate, never restart.** A six-hour outage inside a 48-hour window leaves 48 hours
+  of real availability. Restarting would let a flapping surface extend the window forever.
+
+**Chronic non-delivery converts a defaulted question into a pinned one** rather than firing it. If
+delivery has been broken long enough that the window cannot be honoured, auto-deciding is the wrong
+move — [default to the one that stops](design.md#infrastructure-failures-and-process-failures-are-different-things)
+— and it makes the outage loud instead of hiding it inside a decision nobody made.
+
+### Windows are learnable; authority is not
+
+Policy sets a **range** per kind and calibration moves the window within it, against the same
+objective and the same loss signal as the ranker. One line is absolute:
+
+> **Timing is learnable. Authority is not.** Calibration may move the answer window. It may never
+> touch `answerable_by`.
+
+- **Asymmetric evidence.** Shortening a window means more decisions made without a human, so it
+  demands materially more evidence than lengthening one — the same asymmetry as
+  [defaulting to the failure that stops](design.md#infrastructure-failures-and-process-failures-are-different-things).
+- **Never below the deployment floor**, whatever the data says.
+- **Recorded and visible**, per deployment rather than global — different fleets have different
+  humans.
+
+**The best thing calibration can discover is not a better window but a question that should not be
+asked.** A kind whose defaults are near-always accepted on review is ceremony, and retiring it saves
+more attention than any amount of tuning. But the system **proposes** that and never decides it:
+silently ceasing to ask is removing the human by inference, which is the one move this design exists
+to prevent. It proposes it, of course, as an article.
+
 ## Wire format
 
 A single JSON object, `flow:feed-article-v1`, carried in the
@@ -701,7 +863,7 @@ A single JSON object, `flow:feed-article-v1`, carried in the
       "explain": "Triggers the full paid CI suite (~12 min, billed). Safe but not free.",
       "operation": { "name": "run-gate", "parameters": { "gate": "build-time", "full": "true" } } }
   ],
-  "impact": 50,
+  "impact_hours": 8,
   "attention_cost": "2m",
   "tags": ["topic:perf", "area:gates"]
 }
@@ -832,37 +994,20 @@ covers gates: the action writes durable state and the next run reads it.
 
 ## Open questions
 
-### Open (#4) — an expiring question must decide, not vanish
+The design questions are settled. What remains is configuration a deployment supplies, and one
+dependency outside this document.
 
-`expires_at` currently deletes. For a question in the *defaulted* mode — *"here are N answers, I
-recommend X; if you do not answer by Y, I take X"* — expiry must instead produce the recorded
-default answer, authored by the system and citing the policy and the step's recommendation. Deleting
-the article and leaving the step parked forever, or firing the default with no record, both violate
-[nothing terminates into ambiguity](design.md#nothing-runs-unwatched) at precisely the point
-where a decision was made without a human.
-
-Also open here: the deadline clock starting on **delivery** rather than creation, the deployment
-floor on how short a step may propose making it, and whether policy may only narrow a question's
-mode (defaulted → pinned) and never widen it.
-
-### Smaller ones
-
-1. **The user-facing noun.** `Brief` / `Post` / `Bulletin` / `Dispatch` / `Notice`. This document
-   uses *article* generically and `flow:feed-article-v1` as the wire tag so the schema name survives
-   whatever the unit is finally called.
-2. **Impact anchors.** Numeric chosen (ratios are all that matter). Sub-question: should the wire
-   also accept anchor names as string sugar (`"high"` → 50) for hand-authored JSON?
-3. **Registry seeding.** The seed sets for the three registries, and whether an unregistered value
-   is rejected at the sink or accepted-but-flagged. This document leans accepted-but-flagged so a
-   new component is never blocked, with the typo cost bounded to a mislabeled chip — bounded by
-   [the fail gradient](#a-degraded-path-is-never-a-silent-path), which fails closed where it counts.
-4. **Where the attention budget comes from.** A reader's stated availability, a per-role default, or
-   inferred from observed session length. The ranking is unaffected either way — only where the fold
-   lands — so this can start as a single configured number and improve later.
-5. **Calibration ground truth.** The honest loss signal is *decisions that expired or defaulted
-   which the human would have decided differently*, which needs a review path to collect at all.
-   Worth designing once the question mechanism exists; until then the proxies in the feedback table
-   carry it.
+1. **The seed set of question kinds.** Each maps to a required role and an answer-window range, and
+   they are companion-repo config rather than contract — but a starting set has to exist, and it is
+   the thing a project will get wrong first if it is not given good defaults.
+2. **The hours-per-currency rate** used to fold spend at risk into `impact_hours` for ordering. A
+   deployment number with no defensible default; a deployment that leaves it unset simply ranks on
+   hours and shows money alongside.
+3. **The checkpoint.** This document assumes a step can leave durable partial work behind when it
+   blocks on a question — otherwise every answered question resumes a step that restarts from
+   nothing. That mechanism belongs in
+   [base-engineering.md](base-engineering.md#6-a-steps-completion-is-a-verified-artifact) and is not
+   written yet.
 
 ## Why this shape
 
