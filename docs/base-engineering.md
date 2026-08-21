@@ -1138,6 +1138,92 @@ handling, a wall-clock budget racing work whose cost the step does not control, 
 leaving a live child. Those are real and they are orthogonal; a redesign that claimed them would be
 taking credit for other people's fixes.
 
+## The flow contract
+
+A flow is a binary. This is everything it implements and everything it may ask for; nothing else
+crosses either boundary. Both are narrow on purpose — [the runner is the local trust
+boundary](design.md#the-runner-is-the-local-trust-boundary) and a flow is a guest inside it.
+
+### What a flow implements
+
+Three subprocess entry points, and no others:
+
+| Command | Returns | Notes |
+|---|---|---|
+| `describe` | the flow manifest | item types, steps and their order, eligibility, `serialized_by`, fresh-session and arena-independent hints, and how each step's artifact is verified |
+| `check <step>` | `satisfied` · `unsatisfied` · `blocked` | launched **with no model account**, so a `check` that wanted to spend could not |
+| `run <step>` | `advanced` · `blocked` | the arena's account is present |
+
+`describe` is deliberately symmetric with `bin/gate list --json`: a subprocess that emits a manifest
+the system validates. One discovery mechanism serves both halves.
+
+### What the runner supplies
+
+Assembled environment, not arguments a flow could forge: the item and step it is running, the
+worktree path, arena context, and the loopback endpoint with a per-run credential. **Never a model
+credential** — the runner runs the agent, so the flow has nothing to spend with.
+
+### What a flow may ask for
+
+Every operation goes to its runner over loopback, and the runner forwards what belongs to Reactor
+with the step's attribution stamped. A flow never addresses Reactor, the code host, or a model
+endpoint itself.
+
+| | Operation | Notes |
+|---|---|---|
+| **Item** | `item.read` | within [read scope](#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped) |
+| | `item.create` | filing into another project — [the ability to ask](#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped), never to write |
+| | `item.annotate:<kind>` | plan · inspection · review · note · **question** |
+| | `item.state` | close as [resolved, declined, or moved](design.md#the-states-and-what-they-belong-to) |
+| | `routing.set` | `flow:` labels and assignee — [its own capability](design.md#the-capability-vocabulary) |
+| **Work** | `artifact.submit` | own step only; Reactor verifies before recording completion |
+| | `checkpoint.write` | own step only |
+| | `hold.place:<kind>` | `blocked`, `waiting`, or `parked` |
+| **Agent** | `agent.run` | one prompt, one completed run; the runner mounts tools, holds credentials, and meters |
+| **Gates** | `gate.run` · `gate.results.read` | the runner executes; the flow asks |
+| **VCS** | `vcs.push:branch:own` · `vcs.pr.create` | proxied — a grant over what the runner does on the flow's behalf, not permission to open a connection |
+| **Engagement** | `article.post` · `article.resolve:own` | [feed articles](engagement-feed.md#the-article) |
+
+Local git inside the worktree is ordinary filesystem work bounded by the step's
+`write:<glob>` grant, and needs no operation here. Only what reaches origin is proxied.
+
+### An operation whose halves must both happen is one call
+
+Two places where splitting would make a stated rule enforceable by convention only:
+
+- **Reporting `blocked` carries the checkpoint.** *Blocking requires a checkpoint* is otherwise a
+  rule two separate calls can half-satisfy — and the failure mode is exactly the lost work the
+  checkpoint exists to prevent.
+- **Asking a question is one operation**, the annotation and the `waiting` hold together. Half of it
+  is either a question nobody is waiting on or an item waiting on a question that does not exist.
+
+### What a flow may not do
+
+Not conventions — the absence of an operation, an environment variable, or a route:
+
+- **Reach the network.** [`net.egress` defaults to none](design.md#a-flow-has-no-network).
+- **Spawn an agent.** There is no credential to spawn one with.
+- **Write an `answer`.** An answer is a human's; a flow that could write one would answer its own
+  question, and [an answer is authority rather than
+  annotation](design.md#the-capability-vocabulary).
+- **Clear a `parked` or `manual` hold.** Clearing a fault it caused, or taking back work a person
+  took over, are exactly the two the [separate clear
+  grant](design.md#the-capability-vocabulary) exists to withhold.
+- **Run outside a runner.** [Including when a developer runs
+  it](design.md#there-is-no-way-to-run-a-flow-except-through-a-runner).
+
+### Open in this contract
+
+1. **Does a flow claim its item, or is it handed one?** The README describes a flow that *"claims
+   one eligible item"*; [step resolution](#step-resolution--steps-dispatch-themselves) has Reactor
+   scanning and dispatching. Both cannot be true, and the difference decides whether `item.claim` is
+   an operation here at all.
+2. **May a step ever clear a hold it placed?** A `blocked` hold clears mechanically when its edge
+   resolves and a `waiting` hold when an answer lands, so there may be no case left — but
+   "no case" and "no capability" should be stated rather than inferred.
+3. **Who writes gate baselines and grants exceptions.** Both are in the
+   [vocabulary](design.md#the-capability-vocabulary) and neither is assigned to an actor.
+
 ## Gate discovery — the project declares, Reactor discovers
 
 Tracker required each gate to be entered by hand into server config (name, command, schedule, host

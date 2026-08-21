@@ -708,10 +708,11 @@ introduce a server→host connection.
   rather than making them. Plain request/response is enough — [escalation pushes out of
   band](engagement-feed.md#the-feed-pulls-escalation-pushes), so the feed itself never needs a live
   channel.
-- **Flow API** — the wire contract flows speak: claim / release, load state, resolve
-  artifact, worktree coordination. This is the seam described
-  [above](#seams-are-process-boundaries--by-design-not-by-accident), and the point where
-  [authority](#authority-roles-steps-and-capabilities) is checked.
+- **Flow API** — every operation a flow performs, arriving [proxied by its
+  runner](#the-runner-is-the-local-trust-boundary) rather than from the flow directly. This is the
+  seam described [above](#seams-are-process-boundaries--by-design-not-by-accident), and the point
+  where [authority](#authority-roles-steps-and-capabilities) is checked. The flow-facing half is
+  [the flow contract](base-engineering.md#the-flow-contract).
 - **Runner API** — registration, the long-poll action channel, and output streaming.
 - **Binary distribution** — how a host bootstraps, how the fleet self-updates, and how a worktree
   gets the flow it will run. Reactor is a **registry, not a build system**: it serves artifacts
@@ -982,6 +983,116 @@ what was downloaded. That the *governor* needs the hash check is worth noting: i
 updatable component in the system, so its integrity check is the one that most needs to be right
 the first time.
 
+## The runner is the local trust boundary
+
+A flow is project-specific code that an agent largely writes, arriving from a companion repo on its
+own release cadence. The runner is operator-installed, generic, and the same binary everywhere. They
+are not equally trusted and the design should stop treating them as peers:
+
+> **The runner is the local trust boundary; a flow is a guest inside it.** Everything a flow needs
+> from the world — the tree, the agent, credentials, Reactor, the code host — arrives through the
+> runner. The flow supplies project-specific judgment and nothing else.
+
+### A flow has no network
+
+> **`net.egress` defaults to none. Loopback to its runner is a flow's only channel.**
+
+The rule already half-existed — [flows never talk to the code host
+directly](#seams-are-process-boundaries--by-design-not-by-accident), because Reactor owns the only
+client — and generalizing it costs nothing while buying a great deal:
+
+- **No direct code host, no direct Reactor, no direct model API, and no exfiltration path.** One
+  channel is one thing to constrain, and the [tool-surface
+  vocabulary](#the-capability-vocabulary) already has the verb to constrain it with.
+- **A flow cannot lie about which step it is.** It never speaks to Reactor, so the runner stamps the
+  attribution — the same reason [an article's `source` is stamped rather than
+  claimed](engagement-feed.md#source--who-created-it). Identity asserted by the constrained party is
+  not identity.
+- **A sandbox with egress blocked entirely still works**, because nothing the flow does depended on
+  reaching out. That makes the isolation posture free rather than a special deployment.
+
+**Anything that reaches origin is proxied, including git.** `push:branch:own` and `pr.create` are
+grants over operations the runner performs on the flow's behalf, not permission for the flow to open
+a connection. Local git in the worktree is ordinary filesystem work and stays the flow's.
+
+### The runner runs the agent, not the flow
+
+The step's agent session is started by the runner, and this is what makes three rules stated
+elsewhere actually enforceable rather than advisory:
+
+| Rule | Why it needs the runner to own the session |
+|---|---|
+| [Cost is metered and attributed](#every-attempt-must-make-progress) | a flow reporting its own spend is the constrained party reporting the number its budget is enforced against |
+| [The runner withholds credentials the step may not use](#seams-are-process-boundaries--by-design-not-by-accident) | a flow that spawned the agent would need the model credential in hand |
+| [Mounted tool set ⊆ step grant](#the-capability-vocabulary) | a flow that mounted its own tools would be granting itself its own reach |
+
+**Invocations are one-shot, never a session the flow drives.** [Context is assembled, never
+accumulated](base-engineering.md#context-is-assembled-never-accumulated) requires that a resumed step
+reconstruct identical context from durable state — so a live conversation, which by definition
+cannot be reconstructed, is already ruled out. A step asks for one completed run at a time, carrying
+what it learned in its [checkpoint](base-engineering.md#a-step-may-carry-work-forward-without-claiming-completion)
+and the tree; each invocation is independently bounded, metered, killable, and resumable. The agent
+is still multi-turn *inside* an invocation — that is the harness's business, and none of the flow's.
+
+### What the runner owns, and what the flow owns
+
+The split is a placement rule of the same kind as [gates from the tree, flows from outside
+it](base-engineering.md#the-principle):
+
+> **The runner does what applies to every flow. The flow holds what is specific to its project.**
+
+| Runner | Flow |
+|---|---|
+| worktree materialization and refresh | which item types exist, and their steps |
+| agent invocation: tool mounting, environment, credentials, metering | what to ask an agent, and when |
+| gate execution | what counts as its step being done |
+| proxying to Reactor, with attribution stamped | the judgment inside `check` and `run` |
+| supervision: deadlines, process groups, verdicts | — |
+| fetching and hash-verifying the flow binary | — |
+| holding and renewing leases | — |
+
+### There is no way to run a flow except through a runner
+
+Running a flow binary by hand bypasses every grant at once — the constrained thing executing without
+the thing that constrains it, and typically during bring-up, when a flow is least deserving of
+trust. So **the developer-facing "run this flow" command is a runner command**, and the flow
+executes in the same assembled environment Reactor would have given it.
+
+The benefit is larger than the closed hole: debugging exercises the real path, so *"it worked when I
+ran it by hand"* stops being a category of bug.
+
+**This obliges a first-class debug path.** Verbose output, one step at a time, no item claimed, no
+lease taken. A bound people route around is worse than no bound, because it is still believed — so
+the ergonomic path has to be the compliant one.
+
+### Provenance is a third tier, and it is recorded
+
+A runner-installed binary whose hash Reactor verified is not the same artifact as one someone
+compiled locally, and the distinction should survive into the record rather than living in whoever
+ran it. A locally built flow is **usable but marked**: a deployment may refuse it outright, and any
+run that used one says so in the ledger — [a degraded path is never a silent
+path](engagement-feed.md#a-degraded-path-is-never-a-silent-path).
+
+### Runner ↔ Reactor
+
+The runner's own surface, all of it [outbound and
+long-polled](#deployment-topology--server-governor-runner):
+
+| | Operation |
+|---|---|
+| **Presence** | register (machine id, os, arch, role, capabilities) · renew · report health |
+| **Work** | long-poll for actions · report a step verdict · stream output |
+| **Proxy** | forward a flow's call with the step's attribution stamped |
+| **Leases** | acquire, renew, release — item claims, exclusions, arena bindings |
+| **Metering** | report tokens, wall time, and arena time per step run |
+| **Artifacts** | fetch flow binaries by `(project, os, arch)`, verify hashes |
+| **Arenas** | provision, destroy, report state — in the arena-host role only |
+
+**The runner is a stamping proxy, not a decision point.** Every authority check still happens at
+Reactor, against [role ∩ grant](#a-human-acting-directly-is-bounded-the-same-way). Moving the check
+into the runner would put it on the machine being constrained, which is the argument
+[against a serverless mode](#no-serverless-variant) in miniature.
+
 ## Model accounts — subscription and API
 
 > Subscription first; API is a second `kind` rather than a second design.
@@ -1144,7 +1255,8 @@ From that, a set of rules that admit no exceptions:
   not progress — an agent can stream tokens forever while accomplishing nothing. The watchdog waits
   on the *process*; the deadline bounds it. Streamed output is telemetry. A heartbeat from the child
   would be an inference too; the process table is the only thing that is not a guess.
-- **Kill the tree, not the child.** A flow spawns an agent, which spawns a compiler. Escalation on
+- **Kill the tree, not the child.** A step's process tree reaches down through the agent the runner
+  started for it to the compiler that agent invoked. Escalation on
   deadline is: graceful signal → grace period → hard kill of the whole process group → confirm
   reaped. A grandchild that survives is an orphan, and an orphan is a **reported fault**, not silent
   debris — an arena that accumulates them is a machine that stops working eventually.
