@@ -818,6 +818,41 @@ ladder defaults, and the full sequence is
 default waits until a human answers it, which converts the fleet's throughput into one person's
 response time — correct where an answer is genuinely required, and expensive everywhere else.
 
+### The feed pulls; escalation pushes
+
+A pull-only feed is right for a surface you visit on your own schedule, and wrong at the moment the
+ladder widens: **escalation only helps if the newly-included people find out.** Left purely pull,
+an article can climb every rung and default without a single human having seen it — a ladder that
+terminates hollow.
+
+> **Push is not a property of an article. It is a property of escalation**, and fires when a hold
+> crosses to a wider audience.
+
+- **No article can ask to be pushed.** There is no field for it, for the same reason an article
+  [names an operation and never a capability](#authority-over-article-actions): a knob every emitter
+  can turn is a knob every emitter turns, and this design already carries one declared value it has
+  to discount for inflation. Push is earned by the normal surface having demonstrably failed, which
+  no emitter can claim on its own behalf.
+- **It is rare by construction.** One notification per rung crossed, per principal newly included —
+  not per article, not per update. A fleet that pushes constantly is a fleet whose questions are not
+  being answered, which is the signal, not the noise.
+- **A push carries a pointer, never the decision.** Out-of-band channels sit outside the
+  deployment's trust boundary and outside
+  [read scope](design.md#a-human-acting-directly-is-bounded-the-same-way);
+  a notification says a decision is escalating to you and where to find it, and the content stays
+  behind the surface that can check who is asking.
+- **A failed push does not stop the clock.** Delivery is per surface: if the feed is healthy the
+  question reached people who could answer, so the window keeps running. The failure is
+  [raised as a fault](#a-degraded-path-is-never-a-silent-path) like any other — a broken mail relay
+  must not be able to halt the fleet's decisions.
+- **It is not question-specific.** Any hold that climbs — a [park](design.md#the-states-and-what-they-belong-to)
+  nobody has looked at, as much as an unanswered question — pushes when it widens. A sick fleet
+  should be able to reach somebody.
+
+Channels are per principal and per deployment, held in
+[ConfigStore](design.md#configstore--the-deployment-owners-residual) with the rest of the deployment
+owner's residual.
+
 ### What firing looks like
 
 When the ladder is exhausted, Reactor:

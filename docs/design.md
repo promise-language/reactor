@@ -1590,7 +1590,10 @@ The ladder, in order, and each rung only if the one before it produced nothing:
 3. **Escalated** — the window elapses and the audience widens up the trust ladder, each rung with
    its own window, terminating at the role
    [guaranteed to exist with a live principal behind it](engagement-feed.md#four-rules-that-close-the-remaining-gaps).
-   That guarantee is what makes the ladder finite instead of hopeful.
+   That guarantee is what makes the ladder finite instead of hopeful. **Widening is the one moment
+   the system pushes** rather than waiting to be visited — see
+   [the feed pulls, escalation pushes](engagement-feed.md#the-feed-pulls-escalation-pushes) — because
+   including someone new only helps if they find out.
 4. **Defaulted** — the ladder is exhausted and the question carries a recommendation: it fires,
    recorded as `defaulted` with the ladder's history attached.
 5. **Permanent wait** — the question carries no default because an answer is genuinely required. It
@@ -2101,11 +2104,9 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
-   sits awkwardly with an article that must be seen before its deadline.
-2. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+1. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-3. **The capability vocabulary will keep growing**, and each addition has to answer the same
+2. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
