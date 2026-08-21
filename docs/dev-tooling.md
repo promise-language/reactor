@@ -1,10 +1,10 @@
 # Promise-based dev tooling
 
 > **This document defines how project dev tooling is built and run** once the tools are written in
-> Promise instead of Go — and why most of the
-> [forge](https://github.com/promise-language/forge) blueprint's machinery stops being necessary.
+> Promise instead of Go — and why most of the machinery a Go blueprint needs stops being necessary.
 > It is scaffolding rather than architecture: it exists because the Go toolchain forced a
-> workaround, and it is expected to be deleted rather than maintained.
+> workaround, and it is expected to be deleted rather than maintained. The earlier Go blueprint is
+> prior art — nothing here is ported from it or compatible with it.
 >
 > This is general, domain-agnostic tooling: it belongs to any project adopting BASE, not to Reactor.
 > See [base-engineering.md](base-engineering.md) for how it fits alongside the rest of the BASE
@@ -15,10 +15,10 @@
 > [base-engineering.md](base-engineering.md#the-principle). Flows are unaffected: they ship as
 > prebuilt binaries and never compile in the worktree.
 
-## Forge is scaffolding, not design
+## The Go blueprint is scaffolding, not design
 
-**The forge blueprint is a workaround stacked on a workaround.** Neither layer is something anyone
-wanted; both are concessions to a toolchain.
+**It is a workaround stacked on a workaround.** Neither layer is something anyone wanted; both are
+concessions to a toolchain.
 
 **Layer one — why a language at all.** Project dev tools have to work identically on Linux, macOS,
 and Windows. Shell scripts proved impossible to maintain consistently across three OSes, so the
@@ -37,7 +37,7 @@ everything else:
   repo root at all.
 
 Add the requirement that every tool reuse a common library instead of reinventing repo-root
-detection, platform dispatch, and subprocess handling, and you arrive at what forge is: a
+detection, platform dispatch, and subprocess handling, and you arrive at what the blueprint is: a
 meta-builder, a `bin/` staging area, committed `./make` / `make.cmd` trampolines, and a source-hash
 stamp in each binary so a stale one refuses to run.
 
@@ -104,7 +104,7 @@ tools/
   from anywhere behave the same.
 - **A change to the shared library invalidates each tool's cached binary.** Editing `common.pr`
   turns the next `promise run tools/gate` into a cache MISS and picks up the new code — so tools
-  cannot be silently served stale, which is the failure mode forge's source-hash stamps existed to
+  cannot be silently served stale, which is the failure mode the source-hash stamps existed to
   prevent.
 
 Each tool is its own module, so each gets its own `main()`. Nothing here needs a platform change.
@@ -184,11 +184,12 @@ binary in place (replacing itself, so there is no parent to kill) or it must for
 faithfully. Exec-in-place is the cleaner answer and matches the no-launcher rule flows already rely
 on.
 
-## What carries over from forge
+## What survives the change
 
-The blueprint's *conventions* survive; only its build machinery goes away.
+The *conventions* survive; the build machinery does not. Nothing is ported — the Go blueprint is
+prior art, and what follows is a list of ideas worth keeping, not artifacts worth carrying.
 
-| Forge concept | Under Promise |
+| Go blueprint concept | Under Promise |
 |---|---|
 | `./make` → compile all tools to `bin/` | **gone** — `promise run tools/<name>` |
 | Source-hash staleness check | **gone** — nothing is pre-built, so nothing is stale |
@@ -211,7 +212,7 @@ building the Go tools it already has, while new tools land as Promise directorie
 `promise run`. A tool moves when someone rewrites it; the hooks and CI steps that call it change one
 line. `./make` and the meta-builder are deleted only when the last Go tool is gone.
 
-For Reactor specifically, the forge Go tooling stays as-is for now — see
+For Reactor specifically, the existing Go tooling stays as-is until the Promise path lands — see
 [design.md](design.md#language).
 
 ## Open questions

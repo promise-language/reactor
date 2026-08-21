@@ -551,7 +551,7 @@ consumes these contracts is [design.md](design.md). Three separate things.
 | Reactor server, runner, governor | **reactor** | the orchestrator and its fleet |
 | Flow common library, gate SDK, wire types | **BASE layer repo** | reusable, domain-agnostic; the wire types are shared with Reactor |
 | Arena provisioning, worktree materialization, flow delivery | **BASE layer repo** | generic machinery (today: workspace) |
-| Dev-tooling conventions | **BASE layer repo** | see [promise-forge.md](promise-forge.md) |
+| Dev-tooling conventions | **BASE layer repo** | see [dev-tooling.md](dev-tooling.md) |
 | **Per-project flow definitions** — step composition, item types, prompts | **a companion BASE repo, one per project** | project-specific, but must not live in the project tree |
 | **Per-project authority config** — roles, step grants, schedules | **the same companion repo** | must be unreachable by the agents it constrains |
 | Gate implementations + baselines | **the project repo** | a gate measures the tree, so it comes from the tree |
@@ -662,7 +662,8 @@ circle; a command cannot.
 
 ### Bounds are authority, not tooling
 
-The same reasoning disposes of a category the forge blueprint quietly misfiles. **`bin/guard` — the
+The same reasoning disposes of a category the conventional tooling layout quietly misfiles.
+**`bin/guard` — the
 hook that runs on every agent tool call — is a grant enforcer, so it belongs with authority, not in
 the project's `bin/`.** The excuse that saves gates does not save it: a weakened gate is caught by
 review before it can authorize anything, but a guard weakened at step N authorizes step N+1
@@ -755,9 +756,10 @@ on.
 ### The shared layer is one repo
 
 **It is [`promise-language/base`](https://github.com/promise-language/base)**, public, and it
-consolidates what was previously spread across `workspace` (delivery, provisioning, arena setup),
-[forge](https://github.com/promise-language/forge) (dev-tooling conventions), and the flow common
-library and gate SDK. A BASE layer already existed in embryo as `workspace` — still private, and
+consolidates what was previously spread across `workspace` (delivery, provisioning, arena setup)
+and two earlier public repos — dev-tooling conventions, and the flow common library and gate SDK.
+Those are prior art: nothing is ported from them and nothing stays compatible with them. A BASE
+layer already existed in embryo as `workspace` — still private, and
 carrying exactly the two-layer mixture described above, generic machinery beside `projects/promise/`
 and `projects/tracker/`. The work is less "create a repo" than "name the layer that exists, move the
 per-project halves out, and port it to Promise".
@@ -826,12 +828,12 @@ Three layers, and only the middle one is negotiable:
 
 1. **The contract** — manifest, envelope, guard protocol, capability grants. BASE's, mandatory,
    language-neutral, tiny.
-2. **A blueprint supplying a default roster** — BASE's, *optional and opinionated*. This is what the
-   Go [forge](https://github.com/promise-language/forge) blueprint is, and what
-   [promise-forge.md](promise-forge.md) is its successor to. It is where `verify` / `format` / `vet`
-   / `test` / `guard` legitimately exist **as names**: a scaffold a new project starts from. A
-   project that ignores it and prints its own JSON is equally compliant. Forge reads as normative
-   today and is not.
+2. **A blueprint supplying a default roster** — BASE's, *optional and opinionated*, specified in
+   [dev-tooling.md](dev-tooling.md). It is where `verify` / `format` / `vet` / `test` / `guard`
+   legitimately exist **as names**: a scaffold a new project starts from. A project that ignores it
+   and prints its own JSON is equally compliant. **A blueprint that reads as normative is a
+   blueprint being misused** — the earlier Go one did, which is the mistake this layer inherits the
+   lesson from rather than the machinery.
 3. **The implementations** — the project's. For a project run under BASE the honest answer to "who
    creates them" is that **the bootstrap is human and the rest is backlog**: somebody hand-writes
    the manifest command and one gate, after which "add a `vet` gate" is an ordinary work item an
@@ -844,10 +846,9 @@ actually authors is gates, fixers, and whatever dev tools it wants for itself.
 
 ### How they are built
 
-Go's [forge](https://github.com/promise-language/forge) blueprint (`./make` → `bin/`, source-hash
-staleness checks, committed trampolines) is what BASE uses today; most of that machinery exists only
-to work around `go run`, and stops being necessary once tools are written in Promise. See
-[promise-forge.md](promise-forge.md).
+The Go blueprint this repo still uses (`./make` → `bin/`, source-hash staleness checks, committed
+trampolines) exists almost entirely to work around `go run`, and stops being necessary once tools
+are written in Promise. See [dev-tooling.md](dev-tooling.md).
 
 ## The principle
 
@@ -959,7 +960,7 @@ lands. Because the artifact is a real binary, the no-launcher property holds for
 
 **Gates — this is where `promise run` matters, for Promise-based gates.** A gate must come from the
 tree under test, so it is built or run from source in the worktree on every execution. For a Promise
-project that makes the [Promise tooling model](promise-forge.md) load-bearing rather than a
+project that makes the [Promise tooling model](dev-tooling.md) load-bearing rather than a
 convenience, and it puts three requirements on it. (A gate in another language faces the same three
 questions in its own toolchain — they are properties of "build from the tree on every run", not of
 Promise.)

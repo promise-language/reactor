@@ -15,7 +15,7 @@ and escalating to a human by design. It succeeds a private predecessor,
 - **[Architecture →](docs/design.md)** — the authority model, deployment topology, and the pluggable persistence split.
 - **[The BASE layer →](docs/base-engineering.md)** — flows, gates, the discovery contract, and what a project owns versus what is delivered to it.
 - **[The engagement feed →](docs/engagement-feed.md)** — the single surface the system calls a human to, ranked by regret per minute of attention.
-- **[Promise dev tooling →](docs/promise-forge.md)** — how project tools are built and run once they are written in Promise.
+- **[Promise dev tooling →](docs/dev-tooling.md)** — how project tools are built and run once they are written in Promise.
 
 ## The idea
 
@@ -192,7 +192,7 @@ bin/verify    # the commit gate: format → build → test
 
 That apparatus exists only to work around limits of the Go toolchain, and is
 expected to go away rather than be ported — see
-[Promise dev tooling](docs/promise-forge.md).
+[Promise dev tooling](docs/dev-tooling.md).
 
 Reactor itself is a Promise program. Install the toolchain from the
 [latest release](https://github.com/promise-language/promise/releases/latest),

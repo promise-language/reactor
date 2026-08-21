@@ -7,7 +7,7 @@
 > **It assumes** the BASE layer: flows, the gate manifest contract, and what a project adopting the
 > methodology provides — all in [base-engineering.md](base-engineering.md).
 > **Depending on it:** [engagement-feed.md](engagement-feed.md), which specifies the human-facing
-> half in detail. Dev tooling is [promise-forge.md](promise-forge.md).
+> half in detail. Dev tooling is [dev-tooling.md](dev-tooling.md).
 >
 > What is undecided is in [Open questions](#open-questions); everything else here is a statement
 > about the system. Progress lives in the [README](../README.md#status), not here.
@@ -81,7 +81,7 @@ Exactly two things are not Promise:
 | | Language | Why |
 |---|---|---|
 | **Another project's gates** | any language, or none | the one deliberate polyglot boundary |
-| **forge dev tooling** | Go today → likely nothing at all | scaffolding around Go's limits; see [promise-forge.md](promise-forge.md) |
+| **This repo's dev tooling** | Go today → likely nothing at all | scaffolding around Go's limits; see [dev-tooling.md](dev-tooling.md) |
 
 **The gate exception is deliberate.** A gate belongs to the project it measures, and that project
 may be written in anything — so the gate contract is a **manifest plus a JSON envelope over a
@@ -2020,11 +2020,11 @@ Reactor's design assumes these land; it does not design around their absence.
 
 **P15 — tool arguments.** A dev tool that cannot take arguments is not a dev tool, and this sits
 directly under the only contract BASE mandates. It is listed as **blocking** rather than worked
-around, because the available workarounds are both wrong: shipping compiled shims rebuilds the forge
+around, because the available workarounds are both wrong: shipping compiled shims rebuilds the very
 machinery the Promise tooling model exists to delete, and reshaping the contract into something
 argument-free would leak a Promise limitation into a surface that is deliberately language-neutral —
 a Rust project satisfies it with `cargo` and has no argument problem at all. See
-[promise-forge.md](promise-forge.md), requirement 3.
+[dev-tooling.md](dev-tooling.md), requirement 3.
 
 **P1 — TLS**, mapped through the PAL to each platform's TLS stack rather than implemented in
 Promise. Because the handshake, cipher suites, and certificate verification come from the OS, this
@@ -2096,7 +2096,7 @@ value is knowing nothing — so they are the better ask.
 | P8 | `toml` | stub | config ergonomics; JSON is sufficient meanwhile |
 | P9 | `schema` | design only | manifest and API payload validation; hand-written validators meanwhile |
 | P10 | `--target` cross-compilation | planned (runtime-architecture phase 7e) | collapses the runner/governor/flow release matrix to one build job; a native CI matrix works meanwhile. Matters more for flows, whose matrix multiplies per project |
-| P11 | Tool-source-directory discovery + compile caching | see [promise-forge.md](promise-forge.md) | replacing the Go `./make` blueprint with `promise run <tool-dir>` |
+| P11 | Tool-source-directory discovery + compile caching | see [dev-tooling.md](dev-tooling.md) | replacing the Go `./make` blueprint with `promise run <tool-dir>` |
 | P12 | Addressing a module in a repo **subdirectory** | **landed in head** — `subdir` on `[require.NAME]`; ships with the next release cut | granular modules out of one BASE repo — wire types, gate SDK, and flow library each addressable on their own |
 | P13 | Partial clone for remote modules | `git clone --bare`, full history, no `--filter` | any remote dependency pulls the entire repo and its history |
 
@@ -2286,4 +2286,5 @@ a proposal awaiting approval.
   only escalation pushes.
 - **The admin UI is a Promise web app compiled to WASM**, served from the binary and speaking the
   same JSON APIs as everything else — not a third language, and not a second API surface.
-- Build tooling is the **forge blueprint** (`./make`, `bin/verify`, ratcheted baselines, guard).
+- **Dev tooling is Go today and is expected to disappear** — `./make`, `bin/verify`, ratcheted
+  baselines, guard — replaced by [the Promise tooling model](dev-tooling.md) rather than ported.
