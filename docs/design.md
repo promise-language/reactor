@@ -687,7 +687,15 @@ introduce a server→host connection.
 
 **Server** (`bin/reactor`, cloud). Holds all state, makes all dispatch decisions, and exposes:
 
-- **Admin web UI** — assets compiled into the binary via `` `embed ``.
+- **Admin web UI** — a **Promise web app compiled to WASM**, served from assets embedded in the
+  binary via `` `embed ``, talking to the same JSON APIs everything else does. It is not a third
+  language and not a second API surface: the UI is another client of the contracts below, which is
+  what keeps [BASE in Promise end to end](#language) true of the human-facing half as well. Ranking,
+  the [attention-budget cut](engagement-feed.md#the-fold-is-a-budget-line-not-a-threshold), and the
+  authority check behind every rendered action all happen server-side, so the app renders decisions
+  rather than making them. Plain request/response is enough — [escalation pushes out of
+  band](engagement-feed.md#the-feed-pulls-escalation-pushes), so the feed itself never needs a live
+  channel.
 - **Flow API** — the wire contract flows speak: claim / release, load state, resolve
   artifact, worktree coordination. This is the seam described
   [above](#seams-are-process-boundaries--by-design-not-by-accident), and the point where
@@ -2094,7 +2102,9 @@ outside project still depends on partial clone landing.
 `os` (process spawn with piped stdio, env, cwd, signals, exec, kill, wait), `io` (files,
 directories, buffered readers/writers, metadata), `json`, `time` (wall clock, monotonic `Instant`,
 `Duration`, sleep), `path`, `net` (TCP listener/stream with reactor-based goroutine parking),
-`std` (`Mutex`, `Channel`, `Task`, `select`, `` `embed ``, `Builder`, collections). These cover the
+`std` (`Mutex`, `Channel`, `Task`, `select`, `` `embed ``, `Builder`, collections), and **string
+interpolation**, which is all the templating a server-rendered fragment needs — the admin UI is a
+WASM client rather than a template engine, so nothing more is required. These cover the
 repo-backed stores' data handling and the concurrency model outright, and they carry the *structure*
 of subprocess supervision — spawn, watch in a goroutine, select against a deadline. Only the sharp
 edges of process control are missing, and those are P14.
@@ -2104,8 +2114,10 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
-   cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
+1. **What the browser side needs from the platform.** The admin UI is a
+   [Promise WASM app](#deployment-topology--server-governor-runner), so it costs no new language and
+   no second toolchain — but whatever host bindings a WASM app requires to reach the DOM are
+   platform work in flight, and this document does not price them.
 2. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
