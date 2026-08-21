@@ -319,7 +319,7 @@ appear, and each addition has to answer the same question — what does this let
 
 | Resource | Capabilities |
 |---|---|
-| Item | read · create · annotate:`<kind>` (plan, inspection, review, note, **question**, **answer**) · state (open/close/reassign) · artifact write:own · checkpoint write:own · **routing** (`flow:` labels, assignee) |
+| Item | read · create · annotate:`<kind>` (plan, inspection, review, note, **question**, **answer**) · state (open/close/reassign) · artifact write:own · checkpoint write:own · `hold.place:<kind>` · `hold.clear:<kind>` · **routing** (`flow:` labels, assignee) |
 | Source tree | read · write:`<glob>` (allow) minus `<glob>` (deny) |
 | VCS | commit · `branch.create` · push:branch:own (may be non-fast-forward) · push:origin (never) · pr.create · pr.merge |
 | Gates | run · results.read · baseline.write · exception.grant |
@@ -327,6 +327,13 @@ appear, and each addition has to answer the same question — what does this let
 | Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` · host.adopt |
 | Engagement | article.post · article.resolve:own · `article.act:<operation>` |
 | Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write |
+
+**Placing and clearing a hold are separate grants, and clearing is the dangerous one.** A step that
+could clear its own [`parked` hold](#the-states-and-what-they-belong-to) would be a step deciding
+that whatever went wrong is fine now, and one that could clear a `manual` hold would be taking work
+back from the person who took it. Placing is ordinary — any step reporting `blocked` places one —
+while clearing `parked` and `manual` is reserved to roles, which is what makes *"I'll handle this"*
+mean anything.
 
 **`annotate:answer` is authority, not annotation.** An answer steers autonomous work, so who may
 write one is gated exactly like any other grant — and on a public code host, where anyone may
@@ -1595,8 +1602,8 @@ The ladder, in order, and each rung only if the one before it produced nothing:
 1. **Addressed** — a named principal, if the question named one.
 2. **Role** — the preference [lapses](engagement-feed.md#audience-and-tags) and the whole answering
    role sees it.
-3. **Escalated** — the window elapses and the audience widens up the trust ladder, each rung with
-   its own window, terminating at the role
+3. **Escalated** — the window elapses and the audience widens to the next role on the question
+   kind's **declared escalation path**, each rung with its own window, ending at the role
    [guaranteed to exist with a live principal behind it](engagement-feed.md#four-rules-that-close-the-remaining-gaps).
    That guarantee is what makes the ladder finite instead of hopeful. **Widening is the one moment
    the system pushes** rather than waiting to be visited — see
@@ -1607,6 +1614,18 @@ The ladder, in order, and each rung only if the one before it produced nothing:
 5. **Permanent wait** — the question carries no default because an answer is genuinely required. It
    waits, visibly, owned by the role that must answer it, and
    [rising](engagement-feed.md#ranking--regret-per-minute-of-attention) as it ages.
+
+**The path is declared, because there is no ladder to climb.** [Roles are flat and do not
+inherit](#the-capability-vocabulary) — deliberately, since inheritance is how capabilities widen
+silently — so "escalate to a higher role" has nothing to compute against. A question **kind**
+therefore declares an ordered list of roles alongside the required role and the window, in the same
+companion-repo config and out of reach of the same agents. Explicit, reviewable, and it leaves the
+flat-role decision intact.
+
+**Which rung a hold has reached is state on the hold**, not on the article. If it lived on the
+article, [wiping the feed](engagement-feed.md#feed-held-state-is-an-optimization-never-authority)
+would silently reset every escalation in flight — and the whole projection model rests on that wipe
+costing nothing but attention.
 
 **"Couldn't ask" and "asked and nobody answered" are different, and only one may default.** Silence
 from someone who saw the question is information — the recommendation was put in front of them and
@@ -1726,10 +1745,12 @@ that, a wrong traversal is unreproducible and the model's flexibility becomes it
 the same trade the design accepts elsewhere by insisting that
 [nothing terminates into ambiguity](#nothing-runs-unwatched).
 
-**Outcomes route to machinery that already exists.** `blocked` becomes a
-[blocking edge](#an-edge-names-a-target-and-a-condition-never-a-version) or a park, and releases the
-arena binding by the [clean-boundary rule](#an-arena-is-leased-to-an-item-not-to-a-step) since the
-reporting step completed. `handoff` makes the item eligible for a role that can run the next step
+**Outcomes route to machinery that already exists.** `blocked` places a
+[hold](#the-states-and-what-they-belong-to) of the kind its reason implies — a
+[blocking edge](#an-edge-names-a-target-and-a-condition-never-a-version) becomes `blocked`, a
+question becomes `waiting`, a fault becomes `parked` — and releases the arena binding by the
+[clean-boundary rule](#an-arena-is-leased-to-an-item-not-to-a-step) since the reporting step
+completed. `handoff` makes the item eligible for a role that can run the next step
 and is recorded as such — never as completion, which would drop the work, and never as blockage,
 which would point remediation at a blocker that does not exist. `complete` finalizes.
 
@@ -2174,10 +2195,16 @@ a proposal awaiting approval.
   optional repo overlay** keyed by GitHub id for admin/private/large artifacts.
 - **Reactor is cloud-only**, and one server serves every role; admin accounts and access control
   are required; tracker's OAuth plan is a useful starting reference.
-- **Authority is role ∩ step**, declared and enforced outside the flow. *(Proposed —
-  see [Authority](#authority-roles-steps-and-capabilities).)*
-- **A Reactor server is always in the picture** — there is no serverless variant. *(Proposed —
-  see [No serverless variant](#no-serverless-variant).)*
+- **Authority is role ∩ grant**, declared and enforced outside whatever it constrains. For agent
+  work the grant is the **step**; for human work it is the **action**, which declares what it
+  requires the same way. Neither can widen the other.
+- **The role vocabulary is deployment-owned; the grants attached to each role are project-owned.**
+  A principal holds an account on the server and therefore a role per project, so `role ∩ step`
+  means the role in the *item's* project, and a fleet-scope role covers what belongs to none.
+  Roles are flat and never inherit, so anything that needs an ordering — escalation above all —
+  declares it explicitly.
+- **A Reactor server is always in the picture** — there is no serverless variant, because the
+  authority model cannot be enforced without one.
 - **Gates measure the tree, so they come from the tree; flows modify the tree, so they come from
   outside it.** Gates are built from the commit under test and never distributed prebuilt. Flows
   are project-specific but versioned outside the project source, so a flow fix never contends with
@@ -2211,7 +2238,8 @@ a proposal awaiting approval.
   refused, additive-only evolution within a major, and persisted step state readable across a flow
   version change. A shared module removes hand-synchronization, not skew.
 - **A flow describes itself; the system constrains it separately.** Operational facts come from the
-  flow's `describe`; roles, grants, capabilities, and read scope are read from companion-repo config
+  flow's `describe`; step grants, per-role capabilities, and read scope are read from companion-repo
+  config
   Reactor loads independently. See
   [What a flow declares](#what-a-flow-declares-and-what-is-declared-about-it).
 - **Which pocket pays is the deployment's business, not the step's.** Subscriptions are ambient to
@@ -2228,6 +2256,28 @@ a proposal awaiting approval.
 - **Steps dispatch themselves; no per-item plan is stored.** The resolver scans declared steps,
   `check` answers cheaply and without a model credential, `run` is invoked for the first
   unsatisfied one, and the scan concludes with `complete` or `handoff`. A stored plan cannot
-  survive per-step flow version resolution, which the design already promises. *(Proposed — see
-  [Step resolution](base-engineering.md#step-resolution--steps-dispatch-themselves).)*
+  survive per-step flow version resolution, which the design already promises.
+- **Adoption is three decisions, not one.** A host is not an arena until adopted; a repo is not a
+  project until its pairing with a companion repo is adopted; and adopting a project **admits its
+  people**, whose roles derive from repository permission through a deployment-owned mapping.
+  `.base/` is a claim checked against a deployment-side fact — denied to every tree-write grant, and
+  a disagreement pauses the project. An unmapped permission yields no role, and the escalation floor
+  is assigned rather than derived so nothing external can remove the last admin.
+- **An item is paused by holds, and `paused` is derived.** Four kinds — `blocked` (ordering),
+  `waiting` (an answer), `parked` (something went bad), `manual` (a person took it over) — carried
+  as a set, each naming the condition that clears it, and an item resumes when the last one clears.
+  Nothing ever stores the pause, because a stored flag is a second copy that can disagree.
+- **A step may carry work forward without claiming completion.** One durable, unverified,
+  step-private checkpoint per `(item, step)`, required when a step blocks, and the discriminator
+  between a legitimate block and a loop.
+- **Every wait on a person is backed by an escalation ladder that terminates** — addressed, then the
+  role, then along the escalation path the question's *kind* declares, then a recorded default, or
+  else a visible permanent wait. *Couldn't ask* never defaults; *asked and nobody answered* may.
+- **Human attention is scheduled, not notified.** One feed; articles ranked by **regret per minute
+  of attention**, in work-hours at risk; the fold at the reader's attention budget. Feed-held state
+  is an optimization, never authority — wipe it and nothing is lost but attention. An article is a
+  shortcut, never a grant, and it names an operation rather than a capability. The feed pulls;
+  only escalation pushes.
+- **The admin UI is a Promise web app compiled to WASM**, served from the binary and speaking the
+  same JSON APIs as everything else — not a third language, and not a second API surface.
 - Build tooling is the **forge blueprint** (`./make`, `bin/verify`, ratcheted baselines, guard).

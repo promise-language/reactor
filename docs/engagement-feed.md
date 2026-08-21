@@ -74,7 +74,7 @@ must already have been streamed to the server or
 committed"*](design.md#a-host-that-is-merely-off-is-not-a-host-that-is-gone).
 The feed is a second store with the same property, so there is no new principle to learn.
 
-The test it must pass: with the feed store emptied, questions are still parked on their items,
+The test it must pass: with the feed store emptied, questions still hold their items,
 answers still recorded with their authors, gates still red, items still blocked. The feed rebuilds
 and the fleet does not notice.
 
@@ -95,7 +95,7 @@ They differ by who maintains them, and they fall along the dichotomy the design 
 
 | Class | Identity | Lifetime | Examples |
 |---|---|---|---|
-| **Condition** | derived key | **held** — exists while the condition is asserted | gate X is red · item #481 is parked on a question · arena Y is absent |
+| **Condition** | derived key | **held** — exists while the condition is asserted | gate X is red · item #481 is waiting on a question · arena Y is absent |
 | **Event** | per-occurrence key | **timed** — leaves once ignoring it costs nothing | today's work summary · a run finished |
 
 **A condition article's key is a pure function of the condition it projects.** That is the
@@ -120,7 +120,7 @@ feed" genuinely safe rather than merely survivable.
 
 ### Questions, answers, and history
 
-A parked question is a condition, so it inherits all of the above: key derived from
+An open question is a condition, so it inherits all of the above: key derived from
 `(item, question id)`, one article by construction, retracted when the answer lands.
 
 The durable records live on the **item**, never in the feed:
@@ -156,8 +156,9 @@ authority stays [role ∩ step](design.md#authority-roles-steps-and-capabilities
 what any answer says, and a human wanting to widen a grant does it in companion-repo config, not in
 a comment an agent parses.
 
-**Dismiss ≠ answer.** Dismissing a question's article does not answer it — the park stands and the
-article returns on the next reconcile, or a human clearing their feed would silently abandon blocked
+**Dismiss ≠ answer.** Dismissing a question's article does not answer it — the
+[hold](design.md#the-states-and-what-they-belong-to) stands and the article returns on the next
+reconcile, or a human clearing their feed would silently abandon blocked
 work. But a dismiss on an *addressed* article is a decline: it lapses the `addressed_to` preference
 immediately and the article returns addressed to the role. The obligation moves; it never
 evaporates.
@@ -552,11 +553,12 @@ where regret is not being modelled, and each of them is a patch over the term th
 ### Downstream weight is computed, never declared
 
 The single most important input is the one an emitter cannot know. A `plan` step asking a question
-has no idea whether three items in two other projects are parked behind it.
+has no idea whether three items in two other projects are blocked behind it.
 
 **Reactor does.** It owns the blocking graph —
 [change sets and blocking edges](design.md#cross-project-work--change-sets-and-blocking-edges),
-parks, the integration lock, arena bindings. So `work_at_risk` is a graph query over a quantity
+[holds](design.md#the-states-and-what-they-belong-to), the integration lock, arena bindings. So
+`work_at_risk` is a graph query over a quantity
 [design.md defines](design.md#every-attempt-must-make-progress): the work already **sunk** into every
 blocked item, measured from the ledger, plus the work still estimated to **remain**, weighted by the
 evidence behind the estimate. Summed for ranking, shown separately on the card — a sum of a
@@ -782,16 +784,16 @@ second is the one that can quietly remove the human, so it carries the structure
 > **An article's `expires_at` never decides anything.** The decision deadline lives on the question
 > annotation, and Reactor fires it from durable state.
 
-The article is a projection; its expiry is feed hygiene, and if the question is still parked the
-[reconcile pass](#two-article-classes) brings it back. Driving a decision from an article's lifetime
+The article is a projection; its expiry is feed hygiene, and while the question still holds its
+item the [reconcile pass](#two-article-classes) brings the article back. Driving a decision from an article's lifetime
 would mean wiping the feed changed what the fleet decided, which
 [feed-held state is an optimization, never authority](#feed-held-state-is-an-optimization-never-authority)
 forbids outright.
 
 ### Policy maps the kind; the step declares only what it is asking
 
-> **A question's *kind* determines both who may answer it and how long they have.** The step
-> declares the kind. It sets neither.
+> **A question's *kind* determines who may answer it, how long they have, and where it escalates.**
+> The step declares the kind. It sets none of the three.
 
 `answerable_by` from policy is what stops a step laundering authority by calling a design decision
 routine. The window comes from the same place for the same reason: **a step choosing its own
@@ -808,11 +810,12 @@ the pairing — the same class of static check as
 
 ### The window elapsing escalates before it decides
 
-A window running out does not go straight to the default. It first widens the audience up the trust
-ladder — each rung with its own window — until it reaches the role
-[guaranteed to have a live principal](#four-rules-that-close-the-remaining-gaps). Only an exhausted
-ladder defaults, and the full sequence is
-[waiting on a person](design.md#waiting-on-a-person).
+A window running out does not go straight to the default. It first widens the audience to the next
+role on the question kind's **declared escalation path** — each rung with its own window — until it
+reaches the role [guaranteed to have a live principal](#four-rules-that-close-the-remaining-gaps).
+The path is declared rather than derived because [roles are flat and do not
+inherit](design.md#the-capability-vocabulary), so there is no ladder to compute. Only an exhausted
+path defaults, and the full sequence is [waiting on a person](design.md#waiting-on-a-person).
 
 **Every question that can carry a defensible recommendation should carry one.** A question with no
 default waits until a human answers it, which converts the fleet's throughput into one person's
@@ -860,8 +863,8 @@ When the ladder is exhausted, Reactor:
 1. Writes the **answer annotation** — `selection = <the recommendation>`, `author = system`,
    `arrival_path = default-fired`, plus the **delivery accounting**: how long the question was
    deliverable, which rungs of the ladder it climbed, and that each window elapsed.
-2. Clears the park, so the resolver re-scans and the step resumes from its checkpoint plus the
-   answer.
+2. Clears the item's `waiting` hold, so the resolver re-scans and the step resumes from its
+   checkpoint plus the answer.
 3. Records the question as **`defaulted`, never `answered`.**
 
 Point 3 is not bookkeeping. *"The human chose the recommendation"* and *"nobody looked"* produce an
@@ -990,7 +993,7 @@ Four routes, one envelope:
   archive tab, state, or endpoint.
 - Keyed by `key`; supersede overwrites in place with the freshen rule.
 - Lives in [LedgerStore](design.md#ledgerstore--per-server-active-state) with the rest of the
-  hot, per-server active state — replacing the bare "notifications" entry there.
+  hot, per-server active state.
 - **Nothing sticks forever, and the exit rule follows from the model.** An article whose regret has
   been effectively zero for a bounded window is **removed**, not kept below a fold: if nothing will
   ever make it worth a human's minute, it is not worth keeping. That is the same judgment
@@ -1066,8 +1069,8 @@ gate is one-shot and a step has exited. Under
 [steps dispatch themselves](base-engineering.md#step-resolution--steps-dispatch-themselves) and
 context assembled at dispatch, nothing is delivered at all:
 
-> The choice action writes the answer annotation → the park clears → the resolver re-scans → the
-> step's `check` reads checkpoint + answer from durable state.
+> The choice action writes the answer annotation → the `waiting` hold clears → the scan re-runs →
+> the step's `check` reads checkpoint + answer from durable state.
 
 No callback envelope, no at-least-once delivery contract, no durable action queue. The same answer
 covers gates: the action writes durable state and the next run reads it.

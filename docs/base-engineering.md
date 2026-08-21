@@ -204,8 +204,8 @@ claim created, which is what lets a review flow run against the PR item without 
 when its claim reaches a terminal state — merged, declined, abandoned, or
 [relocated](design.md#relocation-is-a-link-not-a-closure) — and the sweep that finds strays is the
 set difference above. An item that is
-[parked](design.md#every-attempt-must-make-progress) is not terminal and keeps its branch, because
-parked work is waiting, not abandoned.
+[paused by a hold](design.md#the-states-and-what-they-belong-to) is not terminal and keeps its
+branch, because paused work is waiting, not abandoned.
 
 **What enforces it is the push, not the local repo.** A step with a shell can always run `git
 branch` locally, and preventing that is not worth attempting. It does not matter: a local ref that
@@ -427,7 +427,8 @@ agent's reach across a boundary is the ability to ask.** Filing requires that pr
 item's read scope, so visibility governs this too: an item cannot file into a project it cannot see.
 
 `blocked on <item>` is then a recorded state with an owner and a resolution path, which is better
-than parking for a human, because the blocker is itself an item the fleet can resolve unattended.
+than a hold that needs a human, because the blocker is itself an item the fleet can resolve
+unattended.
 The stall becomes throughput. Reactor's half — change sets, the kinds of blocking edge, and what
 happens to the arena — is in
 [design.md](design.md#cross-project-work--change-sets-and-blocking-edges).
@@ -1463,3 +1464,18 @@ ever constrain or annotate what the project already declared.
 
 *(This is a lesson carried from prior art, not a data migration — see
 [design.md](design.md#context).)*
+
+## Open questions
+
+What is genuinely undecided in the project-facing layer. Everything else here is a statement about
+the system.
+
+1. **Where the reusable machinery finally consolidates.** It is spread across several repos today,
+   and the generic/specific boundary is firm while the packaging is not — see
+   [What lives where](#what-lives-where).
+2. **Whether per-project definitions move out of the shared repo.** A shared BASE repo accumulating
+   a `projects/<name>/` directory per orchestrated project is where the domain-agnostic claim leaks;
+   moving them means adding a project touches no shared repo at all.
+3. **Where the methodology documentation lives.** The [white paper](../WHITEPAPER.md) could move
+   beside this layer rather than beside the orchestrator, at the cost of breaking public inbound
+   links.
