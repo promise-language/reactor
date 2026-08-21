@@ -526,7 +526,7 @@ ones — which is precisely how a human spends their scarce hour badly while thr
 ### Regret has exactly three sources
 
 ```
-regret(a,t) = blocked_value(a,t) × accrual_rate        // accrual
+regret(a,t) = work_at_risk(a,t)                       // accrual
             + P(window closes) × P(default wrong) × cost_if_wrong   // irreversibility
             + residual_value(a,t)                      // obsolescence
 ```
@@ -556,11 +556,17 @@ has no idea whether three items in two other projects are parked behind it.
 
 **Reactor does.** It owns the blocking graph —
 [change sets and blocking edges](design.md#cross-project-work--change-sets-and-blocking-edges),
-parks, the integration lock, arena bindings. So `blocked_value` is a graph query, and a question
-blocking eleven transitive items with real spend already sunk into them ranks itself. It also
-**rises on its own** as work piles up behind it, with nobody re-posting — the accrual term doing the
-work that [trunk-red preemption](design.md#gate-execution--reactors-half) already does for
-landings, generalized.
+parks, the integration lock, arena bindings. So `work_at_risk` is a graph query over a quantity
+[design.md defines](design.md#every-attempt-must-make-progress): the work already **sunk** into every
+blocked item, measured from the ledger, plus the work still estimated to **remain**, weighted by the
+evidence behind the estimate. Summed for ranking, shown separately on the card — a sum of a
+measurement and an estimate is not itself a measurement.
+
+A question blocking eleven transitive items with real spend behind them therefore ranks itself, and
+**rises on its own** with nobody re-posting: more items pile up behind it, and the work already sunk
+grows more at risk as trunk moves under it. That is the accrual term doing what
+[trunk-red preemption](design.md#gate-execution--reactors-half) already does for landings,
+generalized.
 
 The same rule bounds the obvious gaming: declared `impact_hours` will inflate, so **compute what can
 be computed** and accept declarations only for what genuinely cannot be. A real unit helps here too
@@ -646,7 +652,7 @@ Less than the model suggests — two small constants tables and one graph query:
 
 | Input | v1 |
 |---|---|
-| `blocked_value` | one graph query — Reactor already owns the graph |
+| `work_at_risk` | one graph query over the ledger, plus per-kind completion history for the estimated half |
 | window / `remaining` | already on the article |
 | `attention_cost` | the defaults table above, calibrated from observed time-to-action |
 | `P(default wrong)` | a constant per question kind, calibrated from reversals and sampled review |
@@ -1031,8 +1037,9 @@ dependency outside this document.
 2. **The hours-per-currency rate** used to fold spend at risk into `impact_hours` for ordering. A
    deployment number with no defensible default; a deployment that leaves it unset simply ranks on
    hours and shows money alongside.
-3. **What a work-hour is.** `impact_hours` and the computed blocked value both need a definition
-   [design.md](design.md#open-questions) does not yet supply.
+3. **The evidence threshold** at which an estimated remaining-work figure earns full weight. Too
+   low and a new item kind swings the feed on two samples; too high and the estimated half never
+   contributes.
 
 ## Why this shape
 

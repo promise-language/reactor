@@ -1302,6 +1302,38 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   fleet-wide rather than per item.
 - **Every step's cost is metered and attributed** to item and step: tokens, wall time, arena time.
   Work that is not metered cannot be budgeted, and work that cannot be budgeted cannot be stopped.
+- **A work-hour is a metered agent-hour**, and it is the unit the
+  [engagement feed](engagement-feed.md#ranking--regret-per-minute-of-attention) ranks in — so what
+  is at risk behind a blocked item has to be a quantity, not a phrase:
+
+  > **Work at risk behind a blocker = Σ over the items it blocks of *work already sunk* plus *work
+  > still estimated to remain*.** The first is measured from the ledger. The second is estimated.
+  > They are summed for ranking and **never merged in the record**.
+
+  Both are needed and neither substitutes: sunk work is what a wrong or abandoned decision throws
+  away, while for some items the work still ahead dwarfs it, and a model that saw only what had
+  already been spent would rank a nearly-finished item above one that has barely started and has a
+  month left.
+
+  - **Sunk is measured** — the wall and arena time already attributed to those items. No new
+    metering; it is the same ledger the budget reads.
+  - **Remaining is estimated**, from what items of that kind have historically cost to complete.
+    **Weighted by the evidence behind it**, so a kind with no history contributes almost nothing and
+    earns weight as samples accumulate — the same posture as a
+    [ratcheted baseline](base-engineering.md), which tightens as evidence arrives rather than being
+    trusted on day one.
+  - **A declared estimate is a bounded adjustment, not an input.** A step estimating the work its
+    own question unblocks is the constrained party sizing its own priority, so it is discounted per
+    source exactly like a declared impact.
+  - **Sunk work becomes more at risk the longer it waits**, because trunk moves under it and
+    [reconciling with a moved trunk is creative work rather than a mechanical
+    rebase](#why-the-step-grant-matters-even-for-a-fully-trusted-actor). That drift term is what makes [blocked items surfacing
+    by age](#blocked-is-a-recorded-state-not-a-stall) a mechanism rather than an aspiration — without
+    it, a question blocking one item for a month ranks on day thirty exactly as it did on day one.
+
+  **The components are displayed, never just the sum** — *"11 items blocked · 43h spent · ~120h
+  estimated remaining"* — for the reason [two currencies](#two-currencies-not-one) gives: a single
+  number hides which half is known and which is guessed.
 - **Budgets are grants that escalate, not ceilings that stop.** A fixed budget answers "how much
   should this cost" — badly, since nobody knows in advance — and then gets used to answer "is this
   still making progress", which it cannot answer at all. A genuinely hard item and a thrashing one
@@ -1823,23 +1855,20 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **What a work-hour is.** The [engagement feed](engagement-feed.md#ranking--regret-per-minute-of-attention)
-   ranks by work-hours at risk, and nothing here meters work-hours — only tokens, wall time, and
-   arena time. Without a definition, "what is blocked behind this" has no quantity to sum.
-2. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
+1. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
    contended, stuck, moved, defaulted, resolved, declined — and never enumerated in one place, which
    is a gap for a system whose rule is that nothing terminates into ambiguity.
-3. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
+2. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
    is specified; the equivalent for a project — who authorizes the pairing a `.base/` config
    declares, and where that record lives — is named in
    [base-engineering.md](base-engineering.md#declare-then-authorize) but not specified.
-4. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
+3. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
    deadline; a pinned question is backed by neither and waits by design.
-5. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+4. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
    sits awkwardly with an article that must be seen before its deadline.
-6. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+5. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-7. **The capability vocabulary will keep growing**, and each addition has to answer the same
+6. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
