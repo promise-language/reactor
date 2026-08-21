@@ -1,13 +1,16 @@
-# Reactor — Design
+# Reactor — Architecture
 
-> Reactor's architecture: the implementation language, the seams, the authority model, the
-> deployment topology, and the pluggable persistence split
-> (`ItemStore` / `ConfigStore` / `LedgerStore`). Reactor is written in **Promise**.
+> **This document defines what Reactor is** — the implementation language, the process seams, the
+> authority model, the deployment topology, the persistence split, the reliability rules, and how
+> steps and gates are executed. Reactor is written in **Promise**.
 >
-> The BASE layer — flows, the gate manifest contract, and the engineering-process setup a project
-> adopts — lives in [base-engineering.md](base-engineering.md); how Promise-based dev tools are
-> built and run is in [promise-forge.md](promise-forge.md). This doc covers only what Reactor
-> itself is and does.
+> **It assumes** the BASE layer: flows, the gate manifest contract, and what a project adopting the
+> methodology provides — all in [base-engineering.md](base-engineering.md).
+> **Depending on it:** [engagement-feed.md](engagement-feed.md), which specifies the human-facing
+> half in detail. Dev tooling is [promise-forge.md](promise-forge.md).
+>
+> What is undecided is in [Open questions](#open-questions); everything else here is a statement
+> about the system. Progress lives in the [README](../README.md#status), not here.
 
 ## Context
 
@@ -168,10 +171,9 @@ than merely acknowledged.
 
 ## Authority: roles, steps, and capabilities
 
-> **Status: proposed model, not yet settled.** Reactor resolves work items of any kind, and *who may
-> do what* is configuration rather than a built-in scenario. One concrete arrangement — how these
-> primitives get configured for a public OSS project — is worked through in
-> [base-engineering.md](base-engineering.md) as an example.
+> Reactor resolves work items of any kind, and *who may do what* is configuration rather than a
+> built-in scenario. One concrete arrangement — how these primitives get configured for a public OSS
+> project — is worked through in [base-engineering.md](base-engineering.md) as an example.
 
 Autonomy is bounded by what an agent is *able* to do, not by what it is asked to do. Reactor makes
 that mechanical with two independent grants that compose.
@@ -286,13 +288,21 @@ appear, and each addition has to answer the same question — what does this let
 
 | Resource | Capabilities |
 |---|---|
-| Item | read · create · annotate:`<kind>` (plan, inspection, review, note) · state (open/close/reassign) · artifact write:own · **routing** (`flow:` labels, assignee) |
+| Item | read · create · annotate:`<kind>` (plan, inspection, review, note, **question**, **answer**) · state (open/close/reassign) · artifact write:own · checkpoint write:own · **routing** (`flow:` labels, assignee) |
 | Source tree | read · write:`<glob>` (allow) minus `<glob>` (deny) |
 | VCS | commit · `branch.create` · push:branch:own (may be non-fast-forward) · push:origin (never) · pr.create · pr.merge |
 | Gates | run · results.read · baseline.write · exception.grant |
 | Orchestration | item.claim · step.dispatch · arena.provision |
-| Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` |
+| Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` · host.adopt |
+| Engagement | article.post · article.resolve:own · `article.act:<operation>` |
 | Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write |
+
+**`annotate:answer` is authority, not annotation.** An answer steers autonomous work, so who may
+write one is gated exactly like any other grant — and on a public code host, where anyone may
+comment, it is the only thing separating a maintainer's decision from a stranger's. The
+[engagement feed](engagement-feed.md#authority-over-article-actions) carries the rest: a question
+declares the role that may answer it, and effective authority is that intersected with the
+answerer's own.
 
 **The tool-surface row is not optional decoration.** Everything an agent reaches through its harness
 is reach that `role ∩ step` cannot describe if it is unnamed, and an MCP server is the clearest
@@ -354,10 +364,10 @@ constrained party in charge of initiating its own widening. Where over-granting 
 something, the project splits the step into a narrow common path and a wider exceptional one, which
 this design already permits and which needs no new mechanism.
 
-**Where the declarations live is part of the model, not a packaging detail.** Roles and step grants
-must sit somewhere the agents they constrain cannot reach — otherwise an `implement` step could
-widen its own grant, and the bound would be self-authorizing. Since flows operate on the *project*
-worktree, the declarations belong outside it: see
+**Where the declarations live is part of the model, not a packaging detail.** Role grants and step
+grants must sit somewhere the agents they constrain cannot reach — otherwise an `implement` step
+could widen its own grant, and the bound would be self-authorizing. Since flows operate on the
+*project* worktree, the declarations belong outside it: see
 [What lives where](base-engineering.md#what-lives-where).
 
 ### What a flow declares, and what is declared about it
@@ -371,10 +381,24 @@ flow describing itself and the other is the system constraining the flow.
 | | Declared by | Contents |
 |---|---|---|
 | **Operational** | the flow binary, via a `describe` command | item types, eligibility, `serialized_by`, fresh-session and arena-independent hints, and how each step's artifact is [verified](base-engineering.md#6-a-steps-completion-is-a-verified-artifact) |
-| **Authority** | companion-repo config Reactor reads on its own | roles, step grants, capabilities, read scope |
+| **Authority** | companion-repo config Reactor reads on its own | step grants, per-role capabilities, read scope |
 
-The split is not fussiness. A flow emitting its own grants would be the constrained party describing
-its constraints, and Reactor could then check a step only against what the flow chose to admit.
+**The role *vocabulary* is deployment-owned; the grants attached to each role are project-owned.**
+A companion repo declares what `reviewer` may do *here*; it does not mint the name. A principal
+holds an account on the Reactor server and therefore a role per project, so a vocabulary defined
+per project would give "who is this person" as many answers as there are projects — and any
+deployment-wide surface, the [engagement feed](engagement-feed.md#audience-and-tags) above all,
+would have no single way to say *for me*. The names live in
+[ConfigStore](#configstore--the-deployment-owners-residual) alongside admin access control; the
+grants stay in the companion repo, which keeps both out of reach of the agents they bind.
+
+`role ∩ step` therefore means **the role in the item's project**, and a fleet-scope role covers
+conditions that belong to no project — an arena declared lost, quota exhausted, a governor
+crash-looping.
+
+The declared/constrained split is not fussiness either. A flow emitting its own grants would be the
+constrained party describing its constraints, and Reactor could then check a step only against what
+the flow chose to admit.
 Conversely, operational facts are best known by the code implementing them — keeping them in the
 binary is what stops a step's declared exclusions from drifting from what the step actually does.
 
@@ -428,13 +452,14 @@ gates are **not** here; they live in the project.
 ### LedgerStore — per-server active state
 
 Lease ledger, gate run history and baselines, orchestration/scheduler run state, turn registry,
-quota snapshot, notifications, the GitHub read-index cache. CRUD-shaped and hot. Implementations:
+quota snapshot, the [engagement feed's](engagement-feed.md#store) article store, the GitHub
+read-index cache. CRUD-shaped and hot. Implementations:
 repo-backed (`_*.json`) and a KV example.
 
 ## No serverless variant
 
-> **Status: proposed.** A Reactor server is always in the picture. There is no mode in which a
-> contributor clones a project, runs a flow against GitHub directly, and never touches a server.
+> A Reactor server is always in the picture. There is no mode in which a contributor clones a
+> project, runs a flow against GitHub directly, and never touches a server.
 
 Supporting both a server-centralized and a serverless path means two backends, two claim-coordination
 schemes, two conformance surfaces, and two sets of bugs, forever. But the decisive argument is not
@@ -698,7 +723,7 @@ the first time.
 
 ## Model accounts — subscription and API
 
-> **Status: proposed.** Subscription first; API is a second `kind` rather than a second design.
+> Subscription first; API is a second `kind` rather than a second design.
 
 Agent work is bought two ways, and they are not the same resource. A **subscription** is a flat fee
 for a token budget per rolling window — much cheaper per token, capped, and **perishable**: quota
@@ -1256,6 +1281,11 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   interchangeable — one is a scarce resource that expires, the other is money — so a grant names
   both rather than collapsing them (see [Model accounts](#two-currencies-not-one)). Quota
   exhaustion pauses rather than spinning against a limit.
+- **A block is not a loop if it carried work forward.** A step that blocks produces no verified
+  artifact, so the predicate above would class every legitimate block as a spin. The discriminator
+  is whether its [checkpoint](base-engineering.md#a-step-may-carry-work-forward-without-claiming-completion)
+  advanced: work done and recorded is progress that cannot finish yet, while a block whose
+  checkpoint stood still repeats an attempt that already failed.
 - **Loop detection is a first-class state.** The same step, on the same input digest, failing with
   the same signature N times means the item is *stuck* — it stops being dispatched and is surfaced.
   Stuck and known is a fine state; stuck and busy is precisely the failure this rule exists to
@@ -1477,9 +1507,45 @@ step does not own, rather than trusting steps to stay in their lanes. Without th
 re-run can invalidate a neighbour's verified state, which destroys correct work and is invisible
 until something downstream needs it.
 
+## Engagement — how the system reaches a human
+
+Autonomy by default with deliberate escalation means the system decides for itself and routes a call
+to a person only when it judges the call should rise. That routing needs a surface, and human
+attention is the scarcest resource the fleet consumes — so the surface is a **scheduler for
+attention**, not a notification list. The full specification is
+[engagement-feed.md](engagement-feed.md); Reactor's obligations are five.
+
+1. **Everything reaches a human through one surface.** A flow step, a gate, or Reactor itself posts
+   an **article** — a self-describing call to attention with its own calls to action. Reactor never
+   branches on who posted it, so a component it has never heard of can reach a person after a
+   data-level registration rather than a code change.
+2. **The feed holds no authority and no history.** An article projects something already durable
+   elsewhere — an item annotation, a gate result, a ledger record — so **wiping the feed loses
+   attention and nothing else.** This is the [arena rule](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)
+   applied to a second store: feed-held state is an optimization, never authority.
+3. **Ranking is scheduling, not relevance.** Articles are ordered by **regret per minute of
+   attention** — what it costs to leave this undone, divided by the human minutes it takes to
+   dispose of it. The largest input is one no emitter can know, so Reactor computes it: what work is
+   blocked behind this, from the graph it already owns. The fold falls where the reader's attention
+   budget runs out rather than at a fixed score.
+4. **A question is an item annotation; the article is its projection.** Questions and answers are
+   durable on the item because they steer autonomous work; the article that carries them decays,
+   is dismissed, or expires without touching either. A question's *kind* determines both who may
+   answer it and how long they have — policy, never the asking step, since a step setting its own
+   deadline is choosing how long its supervisor gets.
+5. **Taking an action confers nothing.** A card is a shortcut to an operation the reader could have
+   invoked directly, performed **as that reader** and checked exactly as if they had. The feed is a
+   channel from low-trust agents to high-trust humans with buttons attached, so provenance is
+   stamped rather than claimed and an action may only fire from a card that carries everything
+   needed to decide.
+
+**An answer is input, not authorization.** It feeds the work; it never feeds the bound. No answer
+widens `role ∩ step`, and a human wanting to widen a grant edits companion-repo config rather than
+writing a comment an agent will read.
+
 ## Cross-project work — change sets and blocking edges
 
-> **Status: proposed.** The project-facing rule is [invariant
+> The project-facing rule is [invariant
 > 5](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped); this
 > is Reactor's half.
 
@@ -1721,16 +1787,31 @@ repo-backed stores' data handling and the concurrency model outright, and they c
 of subprocess supervision — spawn, watch in a goroutine, select against a deadline. Only the sharp
 edges of process control are missing, and those are P14.
 
-## Milestones
+## Open questions
 
-> **Unblocked, not yet drawn.** Sequencing waited on *what lives where and what each piece is
-> for*; the authority model, the topology, and the
-> [BASE layer boundary](base-engineering.md) are now settled enough that a build order would no
-> longer have to be redrawn. Two things gate the *start* rather than the shape: `promise run`
-> argument passing, without which no Promise dev tool can take arguments, and the promotion of P12
-> out of trunk. Neither affects the design, so the contract work — wire types, the gate output
-> envelope schema, and the flow `describe` schema including per-step artifact verification —
-> proceeds in parallel and is waiting when they land.
+What is genuinely undecided. Everything else in this document is a statement about the system, not
+a proposal awaiting approval.
+
+1. **What bounds a human acting directly.** `role ∩ step` describes a step; a person answering a
+   question or taking a feed action has no step, so the model as written does not cover them.
+2. **What a work-hour is.** The [engagement feed](engagement-feed.md#ranking--regret-per-minute-of-attention)
+   ranks by work-hours at risk, and nothing here meters work-hours — only tokens, wall time, and
+   arena time. Without a definition, "what is blocked behind this" has no quantity to sum.
+3. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
+   contended, stuck, moved, defaulted, resolved, declined — and never enumerated in one place, which
+   is a gap for a system whose rule is that nothing terminates into ambiguity.
+4. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
+   is specified; the equivalent for a project — who authorizes the pairing a `.base/` config
+   declares, and where that record lives — is named in
+   [base-engineering.md](base-engineering.md#declare-then-authorize) but not specified.
+5. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
+   deadline; a pinned question is backed by neither and waits by design.
+6. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+   sits awkwardly with an article that must be seen before its deadline.
+7. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+   cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
+8. **The capability vocabulary will keep growing**, and each addition has to answer the same
+   question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
 

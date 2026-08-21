@@ -1,9 +1,14 @@
-# Proposal: the engagement feed
+# The engagement feed
 
-> **Status: draft.** The design questions are settled; what remains is
-> [configuration and one dependency](#open-questions).
+> **This document defines how the system spends human attention** — the article, ranking by regret
+> per minute, questions and their deadlines, and what a reader is permitted to do from a card.
 >
-> **Related:** [design.md](design.md) · [base-engineering.md](base-engineering.md)
+> **It assumes** [design.md](design.md)'s authority model and persistence split, and
+> [base-engineering.md](base-engineering.md)'s step resolution.
+> **Depending on it:** nothing yet; design.md carries a summary and links here for the schema.
+>
+> What is undecided is in [Open questions](#open-questions); everything else here is a statement
+> about the system.
 
 ## Goal
 
@@ -298,13 +303,30 @@ fields and no fixed cap: ordering carries the emphasis.
 
 ```jsonc
 { "kind": "link", "label": "Trend chart", "url": "https://…" }
-// kind: "link" | "image" | "file" | "item" | "patch"
-// reference: internal reference (item id, patch hash, …) when kind in {item, patch}
+// kind: "link" | "doc" | "image" | "file" | "item" | "patch"
+// reference: internal reference (item id, artifact id, patch hash, …)
+//            when kind in {doc, item, patch}
 ```
 
-Bytes are **not** embedded in the article — the same rule as the gate output envelope. An
-`image`/`file` attachment points at an external URL or at a Reactor-served blob uploaded separately;
-the article carries the reference only.
+| `kind` | What the reader gets |
+|---|---|
+| `link` | a destination — click to leave |
+| **`doc`** | **a markdown document, rendered in place** |
+| `image` | an image, inline |
+| `file` | something to download |
+| `item` | a linked item, rendered as a card |
+| `patch` | a diff, rendered as one |
+
+**`doc` earns its own kind because markdown is the canonical user-facing format.** The artifacts a
+step actually produces — a plan, an inspection, a review, an answer — are markdown, so attaching one
+should *render* it, not offer a download of it. That is the whole difference from `file`, and from
+`link` it is the difference between content and a destination: a `doc` is part of what the reader is
+being asked to consider, not somewhere else to go.
+
+Bytes are **not** embedded in the article — the same rule as the gate output envelope. Every kind
+carries a reference: a `doc` names an item artifact or a Reactor-served blob, an `image`/`file`
+points at an external URL or a blob uploaded separately. The one inline exception is the article's
+own `description`, which is markdown by the same reasoning.
 
 ### Action — the call(s) to action
 
@@ -999,15 +1021,13 @@ dependency outside this document.
 
 1. **The seed set of question kinds.** Each maps to a required role and an answer-window range, and
    they are companion-repo config rather than contract — but a starting set has to exist, and it is
-   the thing a project will get wrong first if it is not given good defaults.
+   what a project will get wrong first if it is not given good defaults, since a kind it invents
+   inherits neither a sensible role nor a sensible window.
 2. **The hours-per-currency rate** used to fold spend at risk into `impact_hours` for ordering. A
    deployment number with no defensible default; a deployment that leaves it unset simply ranks on
    hours and shows money alongside.
-3. **The checkpoint.** This document assumes a step can leave durable partial work behind when it
-   blocks on a question — otherwise every answered question resumes a step that restarts from
-   nothing. That mechanism belongs in
-   [base-engineering.md](base-engineering.md#6-a-steps-completion-is-a-verified-artifact) and is not
-   written yet.
+3. **What a work-hour is.** `impact_hours` and the computed blocked value both need a definition
+   [design.md](design.md#open-questions) does not yet supply.
 
 ## Why this shape
 

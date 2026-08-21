@@ -1,8 +1,10 @@
-# Promise-Based Dev Tooling
+# Promise-based dev tooling
 
-> **Status: proposal.** How project dev tooling works when the tools are written in Promise instead
-> of Go — and why most of the [forge](https://github.com/promise-language/forge) blueprint's
-> machinery stops being necessary.
+> **This document defines how project dev tooling is built and run** once the tools are written in
+> Promise instead of Go — and why most of the
+> [forge](https://github.com/promise-language/forge) blueprint's machinery stops being necessary.
+> It is scaffolding rather than architecture: it exists because the Go toolchain forced a
+> workaround, and it is expected to be deleted rather than maintained.
 >
 > This is general, domain-agnostic tooling: it belongs to any project adopting BASE, not to Reactor.
 > See [base-engineering.md](base-engineering.md) for how it fits alongside the rest of the BASE

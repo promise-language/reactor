@@ -1,16 +1,19 @@
-# BASE Engineering — The Project-Facing Layer
+# BASE Engineering — the project-facing layer
 
-> **Status: draft.** A starting point to be reworked, not a finished specification.
+> **This document defines what a project adopting BASE must provide, and what BASE provides to it**
+> — the six invariants, the gate contract, step resolution, and what lives in which repo. Some of it
+> is owned and built by the project (gates); some is project-specific but deliberately versioned
+> outside the project's own source (flows).
 >
-> Everything here describes what a project adopting Bounded-Autonomy Software Engineering runs
-> against — some of it owned and built by the project (gates), some of it project-specific but
-> deliberately versioned outside the project's own source (flows). Reactor's half of these
-> contracts — how it discovers, schedules, distributes, and executes — is in
-> [design.md](design.md). The methodology behind it all is in the [white paper](../WHITEPAPER.md).
+> **It assumes** the methodology in the [white paper](../WHITEPAPER.md).
+> **Depending on it:** [design.md](design.md), which is Reactor's half of every contract here — how
+> it discovers, schedules, distributes, and executes.
+>
+> What is undecided is marked inline; everything else here is a statement about the system.
 
 ## Invariants
 
-> **Status: mandatory.** Unlike the rest of this document, these are not proposals. Everything below
+> **These are the load-bearing six.** Everything else in this document
 > — the manifest, the gate taxonomy, the tool layout — exists to serve them. A system that satisfies
 > them by other means is fine; a system that does not satisfy them is not BASE.
 
@@ -465,6 +468,45 @@ flow limiting itself.
 A claimed completion that fails its check is **not an error**. The step is not done, and it is
 returned to resolution *with the failure as its context* — which is precisely the "why am I running
 again" input a step needs to do better on the second pass than the first.
+
+#### A step may carry work forward without claiming completion
+
+The artifact is a *completion* record, so a step that has done real work and is not done has nowhere
+to put it. That is not a theoretical gap. A `plan` step that drafts half a plan and then needs a
+human decision cannot write the artifact — that would claim completion — and
+[cannot touch the tree at all](design.md#why-the-step-grant-matters-even-for-a-fully-trusted-actor),
+which is the whole point of its grant. Its work is discarded, and the run that resumes after the
+answer arrives **redoes it** — the repetition [never spin](design.md#reliability--never-stall-never-spin)
+exists to forbid.
+
+> **A step may write one durable, unverified, step-private **checkpoint**: work carried forward
+> without a claim of completion.**
+
+- **A checkpoint is never a completion.** Nothing verifies it and nothing reads it as evidence of
+  doneness, so the artifact set remains the only completion record and the invariant above is
+  untouched.
+- **One per `(item, step)`, replaced wholesale, retired when the step completes.** The population is
+  bounded by steps in flight, not by attempts.
+- **Private to its own step.** Other steps read the artifact, never the checkpoint — otherwise it
+  becomes an unverified side channel between steps, which is exactly what single-authorship exists
+  to prevent. A step [declaring a fresh session](#a-step-may-declare-that-it-does-not-want-the-inheritance)
+  discards its checkpoint too, for the same reason it discards the agent's context.
+- **Blocking requires a checkpoint, or an explicit statement that there is nothing to carry.**
+  Blocking with work done and nothing written costs exactly as much as spinning.
+
+It is not a store, a lease, or a new layer — it is artifact-shaped minus the completion claim, so it
+lives where artifacts live and needs no capability the step does not already hold.
+
+**Three rules elsewhere quietly assumed it existed.** *Blocking releases the arena because the
+discovering step commits its work* — a step that may not write the tree cannot.
+*Wind-down means reach a verifiable artifact or leave the tree in a state the next attempt can start
+from* — same gap, same steps. And *progress is a new verified artifact* would classify every
+legitimate block as a loop. The checkpoint is what makes all three true for steps whose output is an
+item artifact rather than a commit.
+
+**It also gives loop detection its discriminator.** A blocked run whose checkpoint did not advance
+did nothing the previous attempt had not, and *is* the loop case. One whose checkpoint advanced is a
+resume, and [a resume is not a retry](design.md#every-attempt-must-make-progress).
 
 #### Verification has a cost, and it needs its own budget
 
@@ -977,8 +1019,7 @@ or escalates to the human at the top of the trust ladder.
 
 ## Step resolution — steps dispatch themselves
 
-> **Status: proposed.** This replaces a fixed step sequence whose completion the *flow* determined
-> by inspecting artifacts. What follows is the contract a flow implements; Reactor's half of it is
+> **The contract a flow implements.** Reactor's half of it is
 > [Step execution](design.md#step-execution--reactors-half).
 
 ### There is no plan
@@ -1022,9 +1063,11 @@ questions.
 | `advanced` | I produced my artifact; re-enter the scan |
 | `blocked` | rerun when *&lt;condition&gt;* — the same [edge vocabulary](design.md#an-edge-names-a-target-and-a-condition-never-a-version) used across projects, plus "a human answered" |
 
-A `run` that produces no artifact is **not an outcome**. The step is simply not done, and
-[invariant 6](#6-a-steps-completion-is-a-verified-artifact) returns it to resolution with the
-verification failure as context.
+A `run` that produces neither an artifact nor a block is **not an outcome**. The step is simply not
+done, and [invariant 6](#6-a-steps-completion-is-a-verified-artifact) returns it to resolution with
+the verification failure as context. A `run` that blocks **must leave a
+[checkpoint](#a-step-may-carry-work-forward-without-claiming-completion)**, or state that it has
+nothing to carry — otherwise the answer it waited for arrives to a step that starts over.
 
 **The scan — what happened to the item.** These are the resolver's conclusions, not any step's:
 
@@ -1067,7 +1110,10 @@ record rather than from anything that died with its process, which is what
   [grant ladder](design.md#the-grant-ladder) extends on. A `run` that produces none did nothing the
   previous attempt had not, and that is the ordinary
   [loop-detection](design.md#every-attempt-must-make-progress) case — park it rather than trying
-  harder.
+  harder. **A block is the one exception, and only when its
+  [checkpoint](#a-step-may-carry-work-forward-without-claiming-completion) advanced**: work was done
+  and recorded, it simply cannot finish yet. A block whose checkpoint stood still is the loop case
+  like any other.
 
 ### What this fixes, and what it does not
 
