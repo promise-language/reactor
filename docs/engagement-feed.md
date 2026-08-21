@@ -688,6 +688,11 @@ The original proposal was written before authority was considered. This section 
 > **An article is a shortcut, never a grant.** Taking an action performs the underlying operation
 > *as the acting principal*, checked exactly as if they had called that endpoint directly.
 
+That check is [role ∩ action](design.md#a-human-acting-directly-is-bounded-the-same-way), the
+human-work form of the same intersection that bounds a step. **An article names an operation, never
+a capability** — it is posted by an agent, and an article carrying its own grant would be the
+constrained party writing its own permission slip.
+
 The feed must be an ingress to the API, not a path around it.
 [Per-call validation against role ∩ step](design.md#where-it-is-enforced) is the enforcement
 point for every item mutation; an action endpoint that performed effects on its own authority would

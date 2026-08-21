@@ -189,7 +189,9 @@ what that step may do while resolving it — independent of who is running it.
 > because an admin ran it, and a role never gains reach because a step needed it.
 
 That intersection is the whole model. It applies least privilege twice: once to the actor, once to
-the work.
+the work. A step is one way work arrives; [a human acting
+directly](#a-human-acting-directly-is-bounded-the-same-way) is the other, and it intersects the same
+way.
 
 ### Why the step grant matters even for a fully trusted actor
 
@@ -236,6 +238,35 @@ wants a separate narrow `commit` for the clean path and a distinct `resolve-conf
 messy one can declare exactly that — the model does not care how finely the work is sliced, only
 that each slice states what it may touch.
 
+### A human acting directly is bounded the same way
+
+A step is not the only thing that mutates an item. A person answers a question, takes an action from
+a [feed card](engagement-feed.md#authority-over-article-actions), or clicks something in the admin
+UI — and none of that runs inside a step, so `role ∩ step` has nothing to intersect. Read literally,
+the model would either not cover them or leave them bounded by role alone.
+
+The generalization is small, because the second factor was never really *a step*. It is **the work's
+own grant**, and a step is one form work takes:
+
+> **Effective authority = role ∩ grant.** For agent work the grant is the **step**; for human work
+> it is the **action**, which declares what it requires exactly as a step does.
+
+Bounding a person by role alone would be simpler and would give up the property that makes the model
+worth having. An admin running `plan` cannot edit source because *planning is not editing* — and by
+the same reasoning an admin clicking *File bug* on a card is filing a bug, not exercising every
+capability their role permits. The card is a shortcut to one operation; the operation states what it
+needs.
+
+Two consequences:
+
+- **An action's requirement is declared where a step's grant is** — outside the reach of whatever
+  proposed it. An article is posted by an agent, so an article carrying its own grant would be the
+  constrained party writing its own permission slip. **An article names an operation, never a
+  capability**, and Reactor resolves what that operation requires from its own config.
+- **The static check extends.** Reactor already [refuses to dispatch a flow to a role that cannot
+  complete it](#where-it-is-enforced); the same check decides which actions a reader may be offered,
+  so a card renders only what its reader could actually invoke.
+
 ### Where it is enforced
 
 A capability model that only the flow honors is documentation, since the flow is the thing being
@@ -256,7 +287,7 @@ Choke points available, roughly outermost to innermost:
 | Agent harness | **Pre-tool hooks** — intercept the agent's tool call before it runs | fine-grained: edits to a path, specific commands |
 | Agent harness | **Tool availability** — never expose the tool at all | a `plan` step with no edit tool |
 | VCS | **Pre-commit / pre-push hooks; server-side branch protection** | commit shape, what may reach which branch |
-| Reactor API | **Per-call validation** against role ∩ step | every item mutation |
+| Reactor API | **Per-call validation** against role ∩ step, or role ∩ action for a human-initiated call | every item mutation |
 | Post-hoc | **Diff and audit review** — did the step touch anything outside its grant? | anything the layers above missed |
 
 Two of these deserve emphasis. **Credential scoping is the strongest** because it is not a check
@@ -1792,25 +1823,23 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **What bounds a human acting directly.** `role ∩ step` describes a step; a person answering a
-   question or taking a feed action has no step, so the model as written does not cover them.
-2. **What a work-hour is.** The [engagement feed](engagement-feed.md#ranking--regret-per-minute-of-attention)
+1. **What a work-hour is.** The [engagement feed](engagement-feed.md#ranking--regret-per-minute-of-attention)
    ranks by work-hours at risk, and nothing here meters work-hours — only tokens, wall time, and
    arena time. Without a definition, "what is blocked behind this" has no quantity to sum.
-3. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
+2. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
    contended, stuck, moved, defaulted, resolved, declined — and never enumerated in one place, which
    is a gap for a system whose rule is that nothing terminates into ambiguity.
-4. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
+3. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
    is specified; the equivalent for a project — who authorizes the pairing a `.base/` config
    declares, and where that record lives — is named in
    [base-engineering.md](base-engineering.md#declare-then-authorize) but not specified.
-5. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
+4. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
    deadline; a pinned question is backed by neither and waits by design.
-6. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+5. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
    sits awkwardly with an article that must be seen before its deadline.
-7. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+6. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-8. **The capability vocabulary will keep growing**, and each addition has to answer the same
+7. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
