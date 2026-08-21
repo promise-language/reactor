@@ -1,8 +1,8 @@
 # Proposal: the engagement feed
 
-> **Status: draft.** Moved from `flow` and adapted to Reactor's design — the
-> durability and authority rules below are settled; **[#3](#open-3--one-role-vocabulary-for-the-system)
-> and [#4](#open-4--an-expiring-question-must-decide-not-vanish) are open** and marked inline.
+> **Status: draft.** Moved from `flow` and adapted to Reactor's design. The durability, authority,
+> and role rules below are settled;
+> **[#4](#open-4--an-expiring-question-must-decide-not-vanish) is open** and marked inline.
 >
 > **Related:** [design.md](../design.md) · [base-engineering.md](../base-engineering.md)
 
@@ -232,9 +232,27 @@ defeat the open-extension goal:
 3. **Registry, not enum; advisory, not behavioral.** The legal set of `component` values, audience
    roles, and tag namespaces lives in a **Reactor-owned registry** — seeded with the built-ins and
    extended by config/registration, not a code change. Reactor **never branches behavior** on any of
-   them; they drive attribution, grouping, and filtering only. A typo or unregistered value degrades
-   a chip or a filter — never logic — and is surfaced as "unregistered" rather than silently
-   trusted.
+   them; they drive attribution, grouping, and filtering only.
+
+### A degraded path is never a silent path
+
+An unregistered identifier is always a defect — something named a role, component, or namespace that
+does not exist. Degrading gracefully and reporting the defect are **two obligations, not a choice
+between them**, the same way [an orphaned grandchild is a reported fault rather than silent
+debris](../design.md#nothing-runs-unwatched). What varies is severity; what never varies is silence.
+
+| Identifier | Nature | On unknown value |
+|---|---|---|
+| `answerable_by` | authority | **fails closed** — nobody may answer, and the question escalates |
+| `audience.role` | routing | **fails open** — delivered to everyone in read scope, and a fault is raised |
+| `source.component` | attribution | delivered, rendered flagged, and a fault is raised |
+| tag `namespace` | cosmetic | delivered, chip flagged, and a low-priority event that decays out |
+
+The fault is itself an article, and the machinery from
+[condition keys](#two-article-classes) keeps it from becoming its own noise problem: keyed on the
+unknown value (`config:unknown-role:<name>`), so five hundred mis-routed articles raise **one**
+fault, held while any article still references the unknown name and retracted when the name is
+registered or the last referent ages out.
 
 ### Source — who created it
 
@@ -363,22 +381,58 @@ critical" is the honest intent.
 
 ### Audience and tags
 
-> **Open ([#3](#open-3--one-role-vocabulary-for-the-system)).** The role vocabulary below is the
-> original proposal's, and it must not survive as written — the feed has to *consume* the system's
-> role definition, not define a second one.
-
 ```jsonc
-{ "role": "operator", "reference": "verifier-1" }   // omitted/empty = everyone
+{ "role": "reviewer", "reference": "alex" }   // omitted/empty = everyone
 ```
 
 The mess in "who is this for" comes from per-person free strings. Targeting by **role** keeps the
-vocabulary tiny and stable; an optional `reference` names a specific identity *within* a role.
-"For me" is the filter `role == <the viewer's role>` matching the configured identity — there is no
-place to type a raw username.
+vocabulary tiny and stable; an optional `reference` names a specific principal *within* that role.
+"For me" is the filter `role ∈ <the viewer's roles>` — there is no place to type a raw username.
+
+**The feed consumes the system's role vocabulary; it defines none of its own.**
+
+> **The role vocabulary is deployment-owned. The grants attached to each role stay project-owned.**
+
+One name set, many grant sets. A companion repo declares *"role `reviewer` may run these steps with
+these capabilities **here**"*; it does not mint the name. This amends
+[design.md](../design.md#what-a-flow-declares-and-what-is-declared-about-it), which currently places
+roles themselves in companion-repo config, and it resolves a tension the design already carried —
+[admin access control](../design.md#configstore--the-deployment-owners-residual) was deployment-wide
+while roles were per project, so "who a principal is" and "what roles exist" answered to different
+owners.
+
+Three reasons that way round:
+
+- **A principal is a deployment-level thing.** They hold an account on the Reactor server. If two
+  projects each define `reviewer` differently and one human holds both, "who is this person" has two
+  answers and *for me* has none.
+- **The bound does not weaken.** Vocabulary and grants both still sit outside the project worktree,
+  so [an agent still cannot widen its own role](../design.md#the-capability-vocabulary).
+- **Every role stays visible to the deployment owner**, which is the same reason
+  [roles are flat and explicit rather than inherited](../design.md#the-capability-vocabulary) — a
+  role nobody central can see is a role nobody reviews. The cost is that a role only one project
+  uses is still declared centrally, and that is the right trade for the same reason.
+
+Two consequences the feed forces into the open:
+
+- **A principal holds a role per project**, plus one at deployment scope for fleet-level conditions
+  (an arena absent, a governor crash-looping, quota exhausted). `role ∩ step` therefore means *the
+  role in the item's project* — a natural reading of the design that was nowhere stated.
+- **An article resolves its audience in the scope of its source** — project scope for item- and
+  gate-sourced articles, deployment scope for fleet-sourced ones. `source` already carries what is
+  needed to tell which.
 
 **Audience is routing, not authority.** It decides whose feed an article ranks into. It does not
 decide who may see it (read scope does) and it does not decide who may act on it (see
 [Authority](#authority-over-article-actions)).
+
+**There is no `agent` audience.** The feed is a human surface. Under
+[context assembled at dispatch](../base-engineering.md#context-is-assembled-never-accumulated) a
+step never reads a feed, it reads durable item state — so an article addressed to an agent is a
+category error, and worse, an unvalidated channel into an agent's context that bypasses the
+assembled-context rule. A component with something to tell a step records it;
+[post-worthy implies record-worthy](#feed-held-state-is-an-optimization-never-authority) already
+says where.
 
 **Tags** are advisory display/filter facets, each shaped `namespace:value` (`topic:perf`,
 `area:build`, `severity:regression`). Two hard rules keep the tag set from rotting:
@@ -491,7 +545,7 @@ That is why a `choice` answer is fine inline — question, options, and recommen
 to take you to it. A sharper test than "is it dangerous", and it explains cases rather than
 enumerating them.
 
-### Two rules that close the remaining gaps
+### Four rules that close the remaining gaps
 
 - **`answerable_by` comes from policy, not from the step.** Otherwise a step launders authority by
   declaring its own question trivial — mark a design-authority decision routine and any contributor
@@ -501,6 +555,22 @@ enumerating them.
 - **The action allow-list is a vocabulary, not a grant.** "It is allow-listed" must never read as
   "it is permitted" — the operation's own capability requirement is what is checked. Worth stating
   outright, because the name invites the opposite reading.
+- **Removing a role is checked, never silent.** An `audience` naming a removed role degrades to
+  everyone-in-read-scope with a fault raised; a *question* requiring one can never be answered,
+  which is a stall wearing a config change as a disguise. No new machinery is needed: the design
+  already promises Reactor can [check statically that a role is capable of completing a
+  flow](../design.md#where-it-is-enforced), and removal runs that check in reverse — enumerating
+  every open question and step assignment the removal would strand. Refuse, or flag for admin
+  review, the same posture as [changed gate metric
+  semantics](../design.md#gate-execution--reactors-half).
+- **One role must always exist, with a live principal behind it.** Escalation needs a destination
+  that cannot be absent — an escalation with nowhere to go is
+  [a wait on something that will never arrive](../design.md#reliability--never-stall-never-spin),
+  and it is discovered at exactly the moment nothing can be done about it. So Reactor refuses a
+  configuration that removes the last administrating role or leaves it with no principal, **checked
+  at config load rather than at escalation time**. This is the bootstrap floor of the whole
+  authority model, not a feed concern: a deployment that cannot reach a human who may change its
+  roles is a locked room with the key inside.
 
 Every action taken is recorded with principal, article key, source, and operation — the same habit
 as [every reclamation is recorded](../design.md#every-exclusion-is-held-by-a-process-never-by-a-flag).
@@ -654,18 +724,6 @@ No callback envelope, no at-least-once delivery contract, no durable action queu
 covers gates: the action writes durable state and the next run reads it.
 
 ## Open questions
-
-### Open (#3) — one role vocabulary for the system
-
-The original proposal seeds audience roles as `operator | reviewer | agent`, which is a **second**
-role vocabulary alongside the [authority model's](../design.md#authority-roles-steps-and-capabilities)
-project-defined roles. Two vocabularies naming the same principals is the
-[mirrored-knowledge failure](../base-engineering.md#no-manual-gate-registration) that discovery
-exists to prevent.
-
-**The feed must consume the system's role definition, not define one.** What remains open is where
-that single definition lives, how the feed references it, and what happens to an article whose
-audience names a role that has since been removed.
 
 ### Open (#4) — an expiring question must decide, not vanish
 
