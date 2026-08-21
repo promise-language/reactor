@@ -1051,6 +1051,21 @@ it](base-engineering.md#the-principle):
 | fetching and hash-verifying the flow binary | — |
 | holding and renewing leases | — |
 
+### A flow requests a lease; the runner takes it
+
+A flow that wanted an item claim, an exclusive worktree, or an integration lock **asks**, and the
+runner acquires it and holds it. The split of who checks what matters, because it is easy to read
+this as the runner making authority decisions, which it must not:
+
+| | Checks | Because |
+|---|---|---|
+| **Runner** | **provenance** — is this request from the process I started, for the work I started it for? | it is the only party that knows, and the answer is local |
+| **Reactor** | **authority** — may this principal, in this role, running this step, hold this? | [the check cannot live on the machine being constrained](#no-serverless-variant) |
+
+The runner is still a [stamping proxy](#runner--reactor): it establishes *whether the requester is
+who it says*, never *whether the request is allowed*. Getting that backwards would move the
+authority model onto the host, which is the serverless argument in miniature.
+
 ### There is no way to run a flow except through a runner
 
 Running a flow binary by hand bypasses every grant at once — the constrained thing executing without
@@ -1060,6 +1075,18 @@ executes in the same assembled environment Reactor would have given it.
 
 The benefit is larger than the closed hole: debugging exercises the real path, so *"it worked when I
 ran it by hand"* stops being a category of bug.
+
+**The developer tool is a runner client, not a mode of the flow binary.** `run this flow on this
+item` is a request to the local runner, which then executes the flow exactly as a dispatched item
+would — same assembled environment, same withheld credentials, same leases taken on its behalf. A
+flow binary that could start itself would reopen the hole from the inside, so the flow stays
+unaware that a person rather than a scheduler asked for it. That unawareness is the property worth
+having: **there is no interactive code path to get wrong**, because there is no interactive code
+path.
+
+The developer still authenticates — the request is theirs, and
+[role ∩ step](#a-human-acting-directly-is-bounded-the-same-way) is checked against *their* role, not
+the flow's. Running a flow by hand is a human-initiated action like any other.
 
 **This obliges a first-class debug path.** Verbose output, one step at a time, no item claimed, no
 lease taken. A bound people route around is worse than no bound, because it is still believed — so
@@ -1297,6 +1324,19 @@ human can clear, and there is no human.
 - **The start time is not optional.** `(host, pid)` alone is reusable — a rebooted machine hands the
   same pid to something else, and the lock silently transfers to an innocent process. The triple is
   what makes "is the holder still alive?" answerable rather than probable.
+- **The holder is always a fleet process; work processes are subjects, never holders.** A lease
+  names two things and they are not the same: the **holder**, whose liveness the lease depends on,
+  and the **subject**, which is what the lease is for — this item claim, this integration, this
+  worktree. The holder is a runner, or for its own exclusive lease a
+  [governor](#deployment-topology--server-governor-runner). It is never a flow, a gate, or an
+  agent.
+
+  Two reasons, and both are rules already stated elsewhere. A lease held by a flow would depend on
+  the liveness of a process **nothing supervises directly** — while the runner that started it is
+  right there, watching, and knows the moment it exits, which is stronger than any expiry. And a
+  flow holding its own lease could renew past its own deadline, so the thing being bounded would be
+  holding the bound. [Nothing runs unwatched](#nothing-runs-unwatched) applied to state rather than
+  to execution.
 - **Reclamation is the server's job, not the holder's.** Every lease carries an expiry the holder
   renews while it lives. A holder that stops renewing loses the lock whether it crashed, was killed,
   lost the network, or had its whole host disappear — and a holder that was merely partitioned
