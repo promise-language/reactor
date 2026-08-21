@@ -156,6 +156,30 @@ authority stays [role ∩ step](design.md#authority-roles-steps-and-capabilities
 what any answer says, and a human wanting to widen a grant does it in companion-repo config, not in
 a comment an agent parses.
 
+**An agent may draft an answer; only a principal gives one.** A person looking at a question often
+wants an agent's help with it — read the code, weigh the options, propose something — and that is
+useful enough to design for rather than forbid. What it must not become is a path by which an agent
+answers carrying a human's authority.
+
+> **Delegating to an agent produces a proposal. Accepting it is the principal's act, and the
+> answer's author is the principal.**
+
+- **The capability does not move.** `annotate:answer` stays [role ∩
+  question](#four-rules-that-close-the-remaining-gaps); the agent is an instrument the principal uses, the way a keyboard is,
+  and gains nothing by being used.
+- **The record says it was drafted.** `arrival_path = agent-drafted`, alongside the accepting
+  principal — so *which decisions did a person actually reason about* stays answerable, which
+  matters because it feeds [calibration](#collecting-the-ground-truth-without-spending-what-it-saves)
+  and because a rubber stamp and a judgment are not the same evidence.
+- **Bounded by the principal's read scope**, not the item's. The agent acts for them and sees what
+  they see.
+- **It is work, so it is metered.** A drafting run is a job Reactor runs for itself: leased to an
+  arena, deadlined, attributed, killable. No new machinery, and no unbudgeted agent.
+
+**Full delegation already exists and is not this.** A question that should be decided with nobody
+present is a [defaulted question](#questions-with-deadlines) — a recommendation, a window, and the
+ladder. Drafting is for the opposite case: a person is here and wants help now.
+
 **Dismiss ≠ answer.** Dismissing a question's article does not answer it — the
 [hold](design.md#the-states-and-what-they-belong-to) stands and the article returns on the next
 reconcile, or a human clearing their feed would silently abandon blocked

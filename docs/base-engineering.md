@@ -1203,9 +1203,11 @@ Not conventions — the absence of an operation, an environment variable, or a r
 
 - **Reach the network.** [`net.egress` defaults to none](design.md#a-flow-has-no-network).
 - **Spawn an agent.** There is no credential to spawn one with.
-- **Write an `answer`.** An answer is a human's; a flow that could write one would answer its own
-  question, and [an answer is authority rather than
-  annotation](design.md#the-capability-vocabulary).
+- **Write an `answer`.** An answer is a principal's; a flow that could write one would answer its
+  own question, and [an answer is authority rather than
+  annotation](design.md#the-capability-vocabulary). A principal may still [ask an agent to *draft*
+  one](engagement-feed.md#questions-answers-and-history) — the authority stays theirs, and so does
+  the acceptance.
 - **Clear a `parked` or `manual` hold.** Clearing a fault it caused, or taking back work a person
   took over, are exactly the two the [separate clear
   grant](design.md#the-capability-vocabulary) exists to withhold.
