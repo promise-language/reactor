@@ -624,6 +624,13 @@ The fix is the composition this design uses everywhere else:
 > honors the pointer only when it matches a registration it already holds. Neither side may widen
 > the other.
 
+Reactor's half — how a repo becomes a project, what an unadopted one may do, and what happens when
+the two sides disagree — is [A repo is not a project until it is
+adopted](design.md#a-repo-is-not-a-project-until-it-is-adopted). Two consequences land here: `.base/`
+is a **denied path in every tree-write grant**, so no step can edit it; and because it is a claim
+checked against a fact, it works as a **tripwire** — an attempt to repoint a project at a more
+permissive companion surfaces immediately rather than taking effect.
+
 Same shape as [role ∩ step](design.md#authority-roles-steps-and-capabilities), as manifest ∩
 deployment overrides, as tenancy ∩ declared need. A rogue edit then fails closed — Reactor never
 authorized that pairing — and `.base/` belongs on the

@@ -371,8 +371,9 @@ may write — `**` and `*.pr` are both legitimate answers, so breadth costs one 
 deny list carves out what stays untouchable inside them. **Deny always beats allow**, and **absence
 of an allow entry means no tree write at all**, so `plan` gets its "cannot touch the tree" for free
 and a step that writes says so even when it says `**`. The point of the carve-outs is to convert
-in-tree controls from detective to preventive: a gate baseline or CI workflow edited silently is
-caught by review today, and refused outright once it is denied. Guard enforces at write time for
+in-tree controls from detective to preventive: a gate baseline, a CI workflow, or the
+[`.base/` pointer](#a-repo-is-not-a-project-until-it-is-adopted) edited silently is caught by review
+today, and refused outright once it is denied. Guard enforces at write time for
 fast feedback, but **the authoritative check is the resulting diff at the step boundary**, because a
 path check alone is escapable by rename.
 
@@ -519,6 +520,11 @@ one.
   — a question for its author and a fault for an operator — because they need different people and
   different actions. A single per-item notification would force them into one card that neither
   reader can act on.
+
+**Holds exist at project scope too.** A [pairing
+disagreement](#a-repo-is-not-a-project-until-it-is-adopted) or a withdrawn adoption holds the whole
+project, and nothing in it dispatches for the duration — recorded once, on the project, rather than
+copied onto every item it stops.
 
 `stuck` is not a fourth kind: [loop detection](#every-attempt-must-make-progress) tripping is one of
 the ways something goes bad, so it is a **reason for parking** alongside an unclassified failure or
@@ -855,6 +861,77 @@ orders of magnitude:
 - **Adoption records are the deployment owner's**, held in
   [ConfigStore](#configstore--the-deployment-owners-residual) with arena allocation and provider
   credentials — not in the project, and not inferable from anything a host says about itself.
+
+### A repo is not a project until it is adopted
+
+The same rule as above, one level up, and for the same reason: what enters a deployment is a trust
+decision rather than a registration detail. Someone with the grant points Reactor at a repo once;
+from then on the repo speaks for itself, by carrying a
+[`.base/` config](base-engineering.md#the-base-directory--how-a-project-names-its-setup) naming the
+companion repo that holds its authority.
+
+> **Until an admin adopts the pairing it is a request, not a project.** Its issues are not work,
+> nothing dispatches, and the request surfaces as an article addressed to the role that may adopt.
+
+- **The claim is in the tree; the fact is not.** `.base/` lives where agents write, so it can never
+  be the record. Reactor holds the pairing in
+  [ConfigStore](#configstore--the-deployment-owners-residual) beside host adoption, and honors the
+  in-tree pointer only where the two agree.
+- **`.base/` is a denied path in every tree-write grant.** No step may edit it, and as with every
+  other carve-out the authoritative check is [the diff at the step
+  boundary](#the-capability-vocabulary) rather than the path, since a path check alone is escapable
+  by rename.
+- **A disagreement pauses the project.** If the tree names a companion the deployment record does
+  not, nothing in that project dispatches until an admin resolves it. Failing closed is right for
+  the same reason [an unclassified failure is treated as a process
+  failure](#infrastructure-failures-and-process-failures-are-different-things): you do not know
+  which side is wrong, and continuing means running agents under grants that may not be the ones
+  intended.
+- **So `.base/` is a tripwire, not authority** — which is what makes it worth having despite being
+  untrusted. If it could never disagree it would be decoration; because it can, an attempt to
+  repoint a project at a more permissive companion is loud and immediate instead of silent.
+- **Withdrawing adoption is how a project leaves**, and it stops dispatch the same way. Recorded
+  like any other reclamation.
+
+### Adopting a project admits its people
+
+Adoption does a third job, and leaving it implicit would mean maintaining a user list — a copy of
+something the project already maintains, drifting the moment anyone's access changes. That is
+exactly the [mirrored-project-knowledge](base-engineering.md#no-manual-gate-registration) failure
+that no manual gate registration exists to prevent, so it gets the same answer.
+
+> **Authentication is the code host's. Role *assignment* is derived from repository permission
+> through a deployment-owned mapping. The vocabulary stays the deployment's; the assignment is the
+> project's.**
+
+Adopting a project therefore admits its collaborators, and there is no separate act granting someone
+access to the admin UI: whoever resolves to a role in an adopted project can sign in, sees what
+[read scope](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped)
+allows, and may do what their role permits. Access is not a fourth thing to administer — it falls
+out of the other three.
+
+- **A mapping, never an identity.** `write → contributor`, `maintain → reviewer`, and so on. Host
+  permissions are coarse and are not this system's vocabulary, so they supply *who*, and the
+  deployment supplies *what that means* — the same division as a project declaring gates and Reactor
+  scheduling them.
+- **An unmapped permission yields no role, and no role means no access.** This matters most where it
+  is least obvious: on a public repository, read permission is *everyone on the internet*. Public
+  read is not an observer role unless a deployment deliberately maps it. Fails closed, like
+  [every other authority identifier](engagement-feed.md#a-degraded-path-is-never-a-silent-path).
+- **Derived, never stored as a second copy.** A role is resolved when it is checked; the
+  [read-index cache](#ledgerstore--per-server-active-state) may hold it, and that cache is
+  **timed** — never authoritative — so revocation propagates on expiry rather than requiring anyone
+  to remember to mirror it. A stored role assignment is the same defect as a stored `paused` flag:
+  a second copy of a fact that can disagree with the fact.
+- **The escalation floor is assigned, never derived.** The rule that
+  [one role must always exist with a live principal behind it](engagement-feed.md#four-rules-that-close-the-remaining-gaps)
+  cannot be satisfied by derivation: a code-host outage or one permission change would remove the
+  last admin, and the deployment would lose the ability to fix its own authority config. At least
+  one principal is assigned deployment-side and depends on nothing external.
+- **Derivation is one source, not the mechanism.** A [GitHub-free
+  deployment](#itemstore--composite-identity-github--private-overlay) assigns directly, and the rest
+  of the model does not change — which is the test that the mapping is a convenience rather than a
+  load-bearing assumption.
 
 ### What the split costs in Promise
 
@@ -1989,17 +2066,13 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
-   is specified; the equivalent for a project — who authorizes the pairing a `.base/` config
-   declares, and where that record lives — is named in
-   [base-engineering.md](base-engineering.md#declare-then-authorize) but not specified.
-2. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
+1. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
    deadline; a pinned question is backed by neither and waits by design.
-3. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+2. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
    sits awkwardly with an article that must be seen before its deadline.
-4. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+3. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-5. **The capability vocabulary will keep growing**, and each addition has to answer the same
+4. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
