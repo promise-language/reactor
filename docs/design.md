@@ -1572,11 +1572,46 @@ The rule, and it applies to any work that costs tokens, arena time, or money:
   signal, just not about the item** — a step killed and resumed many times on one arena indicts the
   arena, and belongs in the same health accounting as accumulated write-offs.
 
-**Parking is not stalling.** The two invariants only appear to conflict: "never stall" forbids
-waiting on something that will never arrive *invisibly*, and parking is the opposite of that — a
-recorded state, with a stated reason, an owner, and a place it shows up in the admin UI. Deciding
-that an item cannot progress without a human, and saying so, is progress. Continuing to spend on it
-is not.
+### Waiting on a person
+
+"Every wait is backed by a live process and a deadline" is a rule about processes, and it does not
+describe a [`waiting` or `parked` hold](#the-states-and-what-they-belong-to): no pid is running, and
+the whole point of some of them is that no clock ends them. Rather than carve an exception, state
+the human half as a peer:
+
+> **Every wait on a process is backed by a live pid and a deadline. Every wait on a person is backed
+> by an escalation ladder that terminates.**
+
+The ladder, in order, and each rung only if the one before it produced nothing:
+
+1. **Addressed** — a named principal, if the question named one.
+2. **Role** — the preference [lapses](engagement-feed.md#audience-and-tags) and the whole answering
+   role sees it.
+3. **Escalated** — the window elapses and the audience widens up the trust ladder, each rung with
+   its own window, terminating at the role
+   [guaranteed to exist with a live principal behind it](engagement-feed.md#four-rules-that-close-the-remaining-gaps).
+   That guarantee is what makes the ladder finite instead of hopeful.
+4. **Defaulted** — the ladder is exhausted and the question carries a recommendation: it fires,
+   recorded as `defaulted` with the ladder's history attached.
+5. **Permanent wait** — the question carries no default because an answer is genuinely required. It
+   waits, visibly, owned by the role that must answer it, and
+   [rising](engagement-feed.md#ranking--regret-per-minute-of-attention) as it ages.
+
+**"Couldn't ask" and "asked and nobody answered" are different, and only one may default.** Silence
+from someone who saw the question is information — the recommendation was put in front of them and
+not contradicted. Silence from someone the question never reached is not, which is why
+[chronic non-delivery converts a defaulted question to a pinned one](engagement-feed.md#the-clock-runs-on-delivery-not-on-creation)
+rather than firing it. The distinction looks like a contradiction and is the opposite of one.
+
+**Rung 5 is a real state and it should be rare.** Every question that can carry a defensible
+recommendation should carry one, because a permanent wait converts the fleet's throughput into one
+person's response time. Where an answer truly is required — an irreversible decision, a change to
+intent, something no recommendation can honestly propose — waiting is correct, and it is not a stall
+by the same test as everything else here: it is recorded, owned, visible, and endable by a named
+person. A stall is a wait nobody can see and nothing can end.
+
+**Parking is not stalling either**, for the same reason. Deciding that an item cannot progress
+without a human, and saying so, is progress. Continuing to spend on it is not.
 
 ### The grant ladder
 
@@ -2066,13 +2101,11 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
-   deadline; a pinned question is backed by neither and waits by design.
-2. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+1. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
    sits awkwardly with an article that must be seen before its deadline.
-3. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+2. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-4. **The capability vocabulary will keep growing**, and each addition has to answer the same
+3. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked

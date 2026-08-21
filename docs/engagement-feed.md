@@ -806,13 +806,25 @@ lapses, so a preference outliving the deadline means the role never got a chance
 the pairing — the same class of static check as
 [refusing an unsatisfiable exclusion set up front](design.md#exclusions-are-declared-and-waiting-for-one-is-not-work).
 
+### The window elapsing escalates before it decides
+
+A window running out does not go straight to the default. It first widens the audience up the trust
+ladder — each rung with its own window — until it reaches the role
+[guaranteed to have a live principal](#four-rules-that-close-the-remaining-gaps). Only an exhausted
+ladder defaults, and the full sequence is
+[waiting on a person](design.md#waiting-on-a-person).
+
+**Every question that can carry a defensible recommendation should carry one.** A question with no
+default waits until a human answers it, which converts the fleet's throughput into one person's
+response time — correct where an answer is genuinely required, and expensive everywhere else.
+
 ### What firing looks like
 
-When the window elapses, Reactor:
+When the ladder is exhausted, Reactor:
 
 1. Writes the **answer annotation** — `selection = <the recommendation>`, `author = system`,
    `arrival_path = default-fired`, plus the **delivery accounting**: how long the question was
-   deliverable, and that the window elapsed.
+   deliverable, which rungs of the ladder it climbed, and that each window elapsed.
 2. Clears the park, so the resolver re-scans and the step resumes from its checkpoint plus the
    answer.
 3. Records the question as **`defaulted`, never `answered`.**
