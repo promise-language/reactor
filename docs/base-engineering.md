@@ -308,8 +308,10 @@ holds its dirty tree, by the same rule that lets `implement` inherit `plan`'s no
   the binding is recorded rather than inferred.
 - **Two lease clocks, already present** — distinct from invariant 3's two *deadlines*. The short
   work lease dies with the step's process, as it should — [a runner restart adopts no
-  processes](design.md#nothing-runs-unwatched). The long arena reservation is what holds the disk
-  state, and it pins to the item rather than returning to the pool between steps.
+  processes](design.md#nothing-runs-unwatched). The arena lease is what holds the disk state, and
+  for an item it is [sticky](design.md#an-arena-is-in-exactly-one-of-four-states): it stays with the
+  item across steps rather than returning to the pool at each process exit, which is what separates
+  it from the transient lease a gate run takes.
 - **The binding is released by demand, not by a clock.** An idle arena costs nothing while the pool
   has spare capacity, and breaking a binding always costs something — the transient state is gone.
   Those are not symmetric, so a healthy binding has no expiry: it is reclaimed when capacity is

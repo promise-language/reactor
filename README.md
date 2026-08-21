@@ -88,8 +88,8 @@ Three processes, and the split is deliberate:
   distributes binaries.
 - **A runner** lives in each workspace — a developer's machine, a container, an
   ephemeral cloud VM — and executes the work: flows, gates, worktree preparation.
-- **A governor** supervises the runner on each host, restarting it and swapping
-  in updates.
+- **A governor** supervises the runners on each host, restarting them and swapping
+  in updates. Sandboxes are supervised instead by the runner that created them.
 
 **The server never reaches into a host.** Runners always open the connection
 themselves and poll for work, so they can sit behind NAT, inside containers, and

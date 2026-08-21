@@ -420,9 +420,10 @@ GitHub-identity deployment; it is never a second source of item identity.
 
 Deliberately minimal: only things the project *can't* own because they are the **deployment
 owner's** choice — quota and cost limits, [model accounts](#model-accounts--subscription-and-api)
-and their credentials, arena allocation and provider creds (including [how long an absent arena is
-held before it is declared lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)), admin
-access control. Flows and gates are **not** here; they live in the project.
+and their credentials, [which hosts are adopted](#a-host-is-not-an-arena-until-it-is-adopted),
+arena allocation and provider creds (including [how long an arena record is retained while its host
+is absent](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)), admin access control. Flows and
+gates are **not** here; they live in the project.
 
 ### LedgerStore — per-server active state
 
@@ -465,15 +466,22 @@ some other machine or container entirely. Three roles, three deployables:
                 │     Reactor server      │  state · scheduling · admin UI
                 │       bin/reactor       │  flow API · binary distribution
                 └────────────▲────────────┘
-                             │  HTTPS, always initiated by the runner (long-poll)
+                             │  HTTPS, always initiated from the workspace (long-poll)
         ┌────────────────────┼────────────────────┐
         │                    │                    │
    ┌────┴─────┐         ┌────┴─────┐         ┌────┴─────┐
-   │ governor │         │ governor │         │ governor │   supervises · swaps binaries
-   │  runner  │         │  runner  │         │  runner  │   executes work in a worktree
-   └──────────┘         └──────────┘         └──────────┘
+   │ governor │         │  runner  │         │ governor │   supervises runners · swaps binaries
+   │  runner  │         └──────────┘         │  runner  │   executes work in a worktree
+   │  runner  │                              └──────────┘
+   └──────────┘
+
     bare metal            container            cloud VM
-   (a dev machine)     (ephemeral arena)   (ephemeral arena)
+   (a host: one         (an arena, not       (a host Reactor
+    governor, two        a host — it has      provisioned, so
+    arenas)              no governor; an      adopted by
+                         arena-host runner    construction)
+                         creates and
+                         destroys it)
 ```
 
 **The invariant: the server never reaches into a host.** Every runner opens its own outbound
@@ -511,20 +519,98 @@ introduce a server→host connection.
 - **Ingress for GitHub events** — PR-open and related signals routed to the scheduler.
 
 **Runner** (`bin/runner`, one per workspace). Long-lived. Registers with the server advertising its
-host OS, arch, role, and capabilities, then long-polls for actions: run a flow binary, run a gate,
-prepare a worktree, provision an arena (in the arena-host role). Streams output back as it goes.
+host OS, arch, role, and capabilities — and is served nothing until its host is
+[adopted](#a-host-is-not-an-arena-until-it-is-adopted) — then long-polls for actions: run a flow
+binary, run a gate, prepare a worktree, provision an arena (in the arena-host role). Streams output
+back as it goes.
 Every one of those actions is a **child process the runner spawns, watches, and bounds by a
 deadline** — the runner does no work in its own address space, and holds no wait it cannot tie to a
 live pid ([Reliability](#nothing-runs-unwatched)).
 **The runner self-updates** — that is what makes shipping new runner code to a deployed fleet
 automatic after a server upgrade, with no operator work per host.
 
-**Governor** (`bin/governor`, one per host/arena). A minimal supervisor: fetch the runner binary
-on first start, keep it alive, and swap it when an update is staged (a distinguished runner exit
-code means "update staged — swap and restart"; a crash restarts with backoff, and auto-rolls-back
-if the crash follows an update). It knows nothing about items, gates, or arenas. It is
-operator-installed and does **not** self-update, which is precisely why it must stay small and
-change almost never.
+**Governor** (`bin/governor`, **one per host**). A minimal supervisor: fetch each runner binary on
+first start, keep it alive, and swap it when an update is staged (a distinguished runner exit code
+means "update staged — swap and restart"; a crash restarts with backoff, and auto-rolls-back if
+the crash follows an update). A governor serves every runner in its scope, and there are two
+arrangements: **system-wide**, launching each runner as its own configured OS user through the
+platform's service manager, or **per user**, where each OS user runs their own governor and needs
+no privilege whatever. The privileged form is still a static arrangement with no per-spawn decision
+and no credential to attach, which is why the objection that stops [a runner from spawning steps as
+other users](#the-account-belongs-to-the-arena-and-that-is-forced) does not carry up to this layer.
+Either way it knows nothing about items, gates, or arenas. It is operator-installed and does
+**not** self-update, which is precisely why it must stay small and change almost never.
+
+**A governor is how a machine appears to the fleet** — the thing that announces it, bears its
+[adoption](#a-host-is-not-an-arena-until-it-is-adopted), and supervises what runs on it, while each
+runner announces its own arena underneath. A governor alive with no runner alive is then a state
+worth being able to see: it distinguishes "the machine is off" from "the machine is up and its
+runners keep dying", which is exactly the signal the
+[write-off accounting](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) wants and cannot infer
+from silence.
+
+**But a governor is not the same thing as the machine, and conflating them is a bug with teeth.**
+Two governors can share a box — deliberately, one per OS user, which is the arrangement that needs
+no privilege; or by accident, someone starting a second while the first is running. Neither may end
+up supervising the same runners twice, and neither may be mistaken for two independent machines.
+
+> **A governor holds an exclusive lease over the runners it supervises, keyed `(machine, os user)`,
+> one per user in its scope. `host:` exclusions are keyed by the machine and never by the
+> governor.**
+
+- **Overlap is refused, not merged.** A per-user governor holds one lease; a system-wide governor
+  holds one per user it manages. A second governor over any of the same users fails to start rather
+  than quietly doubling the fleet's idea of local capacity — which is the shape of failure that
+  shows up later as inexplicable contention rather than as an error.
+- **The local half of the lock is taken before the server is reached.** The governor is what
+  recovers a machine, so a double start must fail with the network down too. A host-local exclusive
+  file lock does that; the server-side lease is the second choke point, in the same spirit as
+  [enforcement being plural](#where-it-is-enforced) rather than resting on one mechanism.
+- **The server-side half catches what a local lock cannot: two machines presenting one identity.**
+  A cloned VM image or a restored snapshot carries its adoption with it, so without this the way to
+  mint adopted hosts is to copy one. The second claimant is refused and must be
+  [adopted](#a-host-is-not-an-arena-until-it-is-adopted) as what it actually is — a new machine —
+  and the refusal is recorded rather than silently retried.
+- **`host:cpu` and the per-host verify lock arbitrate *physical* contention**, so they key off the
+  machine. Two governors on one box share them; splitting supervision by user must not double the
+  box's apparent capacity. **A sandbox inherits its parent machine's `host:` identity** for exactly
+  the same reason — eight containers on one machine are eight arenas contending for one CPU, not
+  eight independent hosts, and keying those exclusions to the sandbox would oversubscribe the
+  machine by a factor of eight while every lock looked correctly held.
+
+**Sandboxes are managed by a runner, never by the governor** — the governor knows nothing about
+arenas, and provisioning one is arena knowledge. So supervision splits by layer, and the split is
+the useful one:
+
+| | Supervises | Repair available |
+|---|---|---|
+| **Governor** | the runner processes on its host | restart, swap the binary, roll back a bad update |
+| **Arena-host runner** | the sandboxes on its host, and the runners inside them | everything the governor can do, plus create and **destroy** — the repair no process inside a sandbox can perform on itself |
+
+> **A sandbox never carries a governor. Its arena-host runner is its supervisor**, and is strictly
+> the more capable one.
+
+- **The rule is not about lifecycle.** A sandbox may be ephemeral or may stand for months, and a
+  deployment may reasonably run *every* arena in one, as an isolation posture rather than a
+  lifecycle choice. Deciding governor placement by how long a sandbox lives would put a governor
+  inside each of a dozen standing containers on one machine — an operator-installed copy, baked
+  into an image, of the one component that
+  [cannot self-update](#deployment-topology--server-governor-runner). That is the worst place in the
+  system to multiply.
+- **What decides it is whether anything outside is positioned to supervise.** A local sandbox's
+  arena-host runner is right there on the box: it can stop the runner inside, swap its binary,
+  restart it, and — uniquely — destroy and recreate the whole sandbox. A cloud VM has nothing local
+  above it and the server may not reach in
+  ([the outbound-only invariant](#deployment-topology--server-governor-runner)), so it must carry
+  its own. **Governor placement falls out of that invariant rather than being a separate policy.**
+- **Recreate-versus-update stays a real question, just a different one.** It is the arena-host
+  runner's choice of repair, not a question about topology: **is recreating this sandbox cheaper
+  than updating it in place?** A container serving one resolution is cattle and gets recreated; a
+  standing one holding warm caches and materialized worktrees is updated where it stands.
+- **Supervision from outside is the only kind that survives the sandbox wedging**, which is the same
+  reason [a hung agent must be terminable by something that is not itself
+  hung](#seams-are-process-boundaries--by-design-not-by-accident). An in-sandbox governor would be
+  inside the wedge it is meant to repair.
 
 **Cloud arena providers are the exception** to the outbound rule: provisioning a GCP or AWS VM is a
 sequence of authenticated API calls with no host to run an arena-host runner on, so those execute
@@ -541,6 +627,45 @@ the arena's purpose. `setup` only sets up — it never runs a gate or a flow; th
 real work afterward, so one tool serves both ephemeral and persistent arenas. This layer is Go
 today and moves to Promise with the rest of BASE; either way it is invoked as a subprocess, so its
 language costs Reactor nothing.
+
+### A host is not an arena until it is adopted
+
+A governor coming up on a new machine can do exactly one thing: announce itself. Until the
+deployment owner **adopts** that host it holds nothing, runs nothing, and is served no binaries. An
+unknown machine asking for source, credentials, and work is a trust decision, not a registration
+detail, and answering it automatically would hand fleet capability to anything that can reach the
+server. Three terms sit on top of one another here, kept distinct because their lifetimes differ by
+orders of magnitude:
+
+| | What it is | Lifetime |
+|---|---|---|
+| **Adoption** | the deployment owner admitting a host to the fleet | once; survives everything below |
+| **Registration** | a runner announcing itself on start — os, arch, role, capabilities — and being issued or rejoining an arena record | every runner start |
+| **Retention** | how long an arena record outlives its runner's absence before the arena is [declared lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) | hours; **default 24** |
+
+- **Reactor's own ephemeral arenas are adopted by construction.** The server provisioned the VM, so
+  it already knows the identity it is about to meet: the arena presents the credential minted for it
+  at provisioning and is admitted with no human in the loop. That is the *only* automatic path, and
+  it is safe precisely because the adopting party created the thing it adopts.
+- **Declaring an arena lost does not un-adopt its host.** The arena record dies; the trust decision
+  does not. A laptop shut for a long weekend comes back, registers, and is issued a **new** arena,
+  with no operator involved and
+  [nothing resumed](#a-host-that-is-merely-off-is-not-a-host-that-is-gone). Conflating the two would
+  turn every write-off into an administrative task and let the fleet degrade by attrition every time
+  somebody took leave.
+- **Withdrawing adoption is the deliberate act, and how a bad machine leaves the pool.** A host that
+  accumulates write-offs or orphaned processes is a machine to take out of service. That is a
+  revocation of adoption rather than an arena-level state, which is what makes "take it out of the
+  pool" something an operator can actually do rather than a thing they keep re-discovering.
+- **The adoption record names the host's default arena state**, and that one field is what keeps a
+  closed default from turning into per-arena paperwork. A build box says `idle`, so every workspace
+  that comes up on it joins the pool; a laptop says `reserved`, so every workspace that comes up on
+  it belongs to the person until they hand it over. **Adopting a machine is a statement about trust,
+  not an enlistment of everything running on it** — collapse the two and adopting a laptop starts
+  dispatching work into the workspace its owner is sitting in.
+- **Adoption records are the deployment owner's**, held in
+  [ConfigStore](#configstore--the-deployment-owners-residual) with arena allocation and provider
+  credentials — not in the project, and not inferable from anything a host says about itself.
 
 ### What the split costs in Promise
 
@@ -618,7 +743,7 @@ under load. Running the process *as* the user that owns the credential removes t
 of answering it.
 
 Two existing pieces get load-bearing rather than incidental as a result.
-[Reservation renewal by the runner's presence](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)
+[An arena record retained by its runner's presence](#a-host-that-is-merely-off-is-not-a-host-that-is-gone)
 is untouched, since nothing about the runner's lifetime changes. And the **per-host verify lock**
 now matters for a concrete reason: several runners on one box genuinely contend for that box's CPU,
 which is the case that lock exists for.
@@ -824,10 +949,102 @@ of it is three mechanisms.
   makes the name meaningful to the scheduler**: opaque strings would force Reactor to treat every
   exclusion as global and serialize unrelated projects against each other. Ordering is separate and
   easier — any total order over names works, so lexicographic suffices.
+- **`host:` resolves to the physical machine, and everything on it resolves the same way.** A
+  sandbox's arena inherits its parent machine's host identity rather than minting its own, and two
+  governors [splitting supervision by OS user](#deployment-topology--server-governor-runner)
+  resolve to one machine between them. What `host:cpu` and the per-host verify lock arbitrate is
+  hardware, and **hardware does not multiply when you virtualize it or when you add a supervisor.**
+  Getting this wrong fails quietly: every lock looks correctly held while the machine is
+  oversubscribed by the number of sandboxes on it.
+- **Arena count is therefore not parallelism.** A box may hold eight arenas and still run one
+  verify at a time. That is correct rather than a scheduling defect — arenas are cheap and the
+  machine is the scarce thing — but it means throughput follows a host's physical exclusions, not
+  its arena count, and a fleet sized by counting arenas is sized wrong.
 
 **Waiting is still a watched state.** A step blocked on an exclusion has a live process and a
 registry entry like any other; "waiting for the integration lock" traces to a pid and a queue
 deadline, never to a belief. What changes is only which clock is charged.
+
+#### An arena is in exactly one of four states
+
+The lease rule above names a holder for every exclusion, and the arena model does not yet hold up
+its end. It names one only for an *item* — so everything else that occupies a machine takes it
+invisibly: a scheduled gate run, a discovery or bisect job Reactor starts for itself, a person
+working directly on their own laptop. An arena forty minutes into a monitor has no item and no step
+in progress, which under [demand-driven reclamation](#an-arena-is-leased-to-an-item-not-to-a-step)
+makes it the *most* attractive victim in the pool. That is the same defect
+[trunk-red preemption](#gate-execution--reactors-half) fixes for the integration lock by giving it a
+real holder, left standing here: occupancy owned by nothing is a flag.
+
+> **An arena is always in exactly one of four states — `leased`, `reserved`, `idle`, or
+> `offline` — and it holds at most one lease at a time.**
+
+The four states describe an **adopted** arena; a host that has announced itself and not yet been
+adopted is not an arena at all and holds nothing
+([above](#a-host-is-not-an-arena-until-it-is-adopted)).
+
+| State | Held by | In the pool |
+|---|---|---|
+| **leased** | one work unit — an item resolution, a gate run, or a job Reactor runs for itself | no |
+| **reserved** | a named person, for direct work | no |
+| **idle** | nobody | yes |
+| **offline** | whatever it held when its runner stopped renewing | no |
+
+- **One lease at a time; concurrency is more arenas, not more leases.** An arena is one workspace
+  with one runner, so "two things at once on this box" is already expressed as two workspaces under
+  two OS users — the mechanism [model accounts](#the-account-belongs-to-the-arena-and-that-is-forced)
+  depends on. Reusing it keeps occupancy answerable: *what is this arena doing* has exactly one
+  answer, and `host:cpu` remains the exclusion that arbitrates the real contention between them.
+- **Three kinds of lessee, differing only in stickiness.** An item's lease is **sticky** — taken
+  at first dispatch and held across steps, because [the accumulated state is what makes the next
+  step cheaper](#an-arena-is-leased-to-an-item-not-to-a-step). A gate run's and a Reactor job's are
+  **transient**: they end when the process ends. A gate is built from the commit under test, on a
+  fresh worktree with its own preflight, so nothing accumulates that a later run would want and
+  stickiness would protect nothing. Same primitive either way; what differs is what releases it.
+- **A transient lease is not a victim.** Under capacity pressure the scheduler waits for it rather
+  than revoking it. Killing a gate run mid-flight destroys the whole run — there is no partial
+  result and the next attempt starts from the beginning — while the deadline it already carries
+  bounds how long pressure has to wait. Sticky bindings remain the victims, in the order
+  [already stated](#an-arena-is-leased-to-an-item-not-to-a-step).
+- **`reserved` is a state, not a note on an idle arena.** A developer's machine is theirs first and
+  the fleet's second; for that class of arena `reserved` is where it sits most of the time, and the
+  fleet borrows it rather than the other way round. Modelling that as policy layered on `idle`
+  means the scheduler reads an occupied workstation as free capacity and the person contends with
+  the fleet for their own CPU. A reserved arena is still adopted and registered — renewing
+  presence, reporting health, and dispatchable explicitly by the person holding it. It is simply
+  not in the pool.
+- **An arena is born in its host's default state, and a lapsed reservation returns it there.** Not
+  to `idle`: reverting unconditionally to the pool would let a workstation's closed default expire
+  away, which is the one thing that default exists to prevent. One rule covers both machines — on
+  a build box, a developer who grabs a workspace and forgets about it releases it back
+  automatically; on a laptop, a lapsed reservation simply re-reserves and the machine stays theirs.
+  Arenas Reactor [provisioned itself](#a-host-is-not-an-arena-until-it-is-adopted) are the exception
+  in the same way they are for adoption: the server made them for a purpose, so they come up
+  working.
+- **A reservation is timed, because a person is not a process.** `(host, pid, start time)` cannot
+  name a human holder, so the [held-or-timed rule](#every-exclusion-is-held-by-a-process-never-by-a-flag)
+  leaves only the other form: a reservation carries an expiry its holder extends, with a deployment
+  default. Without one, somebody who reserves a machine and then goes on leave removes it from the
+  pool permanently and silently — precisely the record only a human can clear that the rule exists
+  to forbid. Expiry hands the arena back to its host's default rather than to the pool, per the
+  bullet above. The deployment owner may also revoke, recorded like any other reclamation.
+- **`offline` retains; it does not release.** An offline arena keeps what it held, and the two
+  clocks [below](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) decide the rest: a transient
+  lease dies with its process within minutes and its work is placed elsewhere immediately, a sticky
+  binding waits on the short unreachability clock, and the arena record is retained on the long one
+  before the arena is declared lost. A reserved arena that goes offline stays reserved — a closed
+  laptop is the normal case, not a signal — until its own expiry passes.
+- **Only `idle` accepts a new lease, which makes monitor cadence best-effort.** A fleet fully leased
+  to items cannot place a scheduled gate, and a cadence the scheduler cannot keep should not be
+  presented as one. A monitor that misses its window is recorded as **contended**, exactly as a
+  [queued step](#exclusions-are-declared-and-waiting-for-one-is-not-work) is — a capacity signal
+  rather than a defect — and a gate that is repeatedly contended is a fleet too small for its own
+  quality floor, which is worth being able to see.
+- **Every transition is recorded, with its cause.** Occupancy history is what answers *why did
+  nothing run on this machine for six hours*, and it is the same accounting that
+  [write-offs](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) and repeated interruptions
+  feed: a machine whose time goes to contention, reservation, or absence rather than to work is
+  only visible if the states are counted.
 
 #### A host that is merely off is not a host that is gone
 
@@ -839,29 +1056,31 @@ orders of magnitude:
 
 | | Renewed | Expires in | On expiry |
 |---|---|---|---|
-| **Work leases** — item claims, a per-project integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
-| **Arena reservation** — the arena's identity, provisioned state, and assignment to a project and, from first dispatch, to an item | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
+| **Work leases** — item claims, a transient arena lease, a per-project integration lock, a per-host verify lock, an exclusive worktree | continuously, by the holding process | seconds to minutes | claims return to the queue, locks release, the step is failed and recorded |
+| **Arena retention** — the arena record: its identity, provisioned state, its assignment to a project, and whatever it currently holds (a lease or a reservation) | by the runner's presence | hours (**default 24**, deployment config) | the arena is **declared lost** |
 
 **Work never waits on a returning host.** The moment a runner stops renewing, everything it was
 holding is reclaimed and its items are dispatchable again — the long clock applies only to the
-*reservation*, never to the work. Otherwise the second clock would reintroduce exactly the stall the
-first one exists to prevent.
+*retention* of the arena record, never to the work. Otherwise the second clock would reintroduce
+exactly the stall the first one exists to prevent.
 
 **One bounded exception: an item whose [bound arena](#an-arena-is-leased-to-an-item-not-to-a-step)
 has stopped responding while it has work to do.** Its accumulated state lives on that arena, so
 dispatching it elsewhere does not rescue the work — it silently discards it. Such an item waits, on
-a **third lease clock, much shorter than the reservation**: on expiry the binding drops, the transient
-state is written off, and the item is dispatchable anywhere from its last commit. This clock exists
-only for unreachability — an item merely *idle* on a healthy arena is not waiting on anything and is
-never evicted by time. Holding an item for a day to save twenty minutes of agent work is the wrong
-trade, and the number should say so. This is a wait, not a stall, by the same test as
-[parking](#every-attempt-must-make-progress) — bounded, recorded, and with a stated reason — but it
-is the one place where work waits on a host at all, so it is called out rather than left implicit.
-A step declared *arena-independent* is not subject to it and dispatches immediately elsewhere.
+a **third lease clock, much shorter than retention**: on expiry the binding drops, the
+transient state is written off, and the item is dispatchable anywhere from its last commit. This
+clock exists only for unreachability — an item merely *idle* on a healthy arena is not waiting on
+anything and is never evicted by time. Holding an item for a day to save twenty minutes of agent
+work is the wrong trade, and the number should say so. This is a wait, not a stall, by the same test
+as [parking](#every-attempt-must-make-progress) — bounded, recorded, and with a stated reason — but
+it is the one place where work waits on a host at all, so it is called out rather than left
+implicit. A step declared *arena-independent* is not subject to it and dispatches immediately
+elsewhere.
 
-**What "declared lost" means is deliberate.** Not "offline", not "degraded" — the reservation is
-force-dropped, the capacity returns to the pool, and an ephemeral arena is reaped at its provider.
-The state on it is written off, not awaited.
+**What "declared lost" means is deliberate.** It is the terminal transition out of `offline`, not
+a synonym for it and not "degraded" — the arena record is force-dropped, the capacity returns to
+the pool, and an ephemeral arena is reaped at its provider. The state on it is written off, not
+awaited.
 
 - **Anything on a lost arena is gone.** Uncommitted worktree state, local caches, partial artifacts,
   output that was never streamed. There is no "it might come back with the work still in it", and
@@ -871,15 +1090,19 @@ The state on it is written off, not awaited.
   item](#an-arena-is-leased-to-an-item-not-to-a-step) — but every fact a correctness decision rests
   on must already have been streamed to the server or committed. Losing an arena therefore costs
   work, never truth, and that is what makes the write-off safe rather than merely unavoidable.
-- **A host that reappears after being declared lost is a new arena.** It re-registers, reprovisions
-  from scratch, and resumes nothing. Any lock it believes it holds already belongs to somebody else,
-  so it must re-acquire before touching anything — a returning runner that trusted its own memory
-  would be a second writer against state that has moved on without it.
+- **A host that reappears after being declared lost is a new arena.** It registers again — its
+  host is still [adopted](#a-host-is-not-an-arena-until-it-is-adopted), so no operator is needed —
+  is issued a fresh arena record, reprovisions from scratch, and resumes nothing. Any lock it
+  believes it holds already belongs to somebody else, so it must re-acquire before touching
+  anything — a returning runner that trusted its own memory would be a second writer against state
+  that has moved on without it.
 - **The write-off is a ledger record, not a log line.** It names the arena and its host, how long it
-  was absent, which leases, items, and artifacts died with it, and what had already been spent on
-  them. That record is what lets the affected items be requeued with honest history instead of
-  reappearing as mysteries — and a host that accumulates these is a machine to take out of the pool,
-  which is only visible if the losses are counted.
+  was absent, which leases, items, and artifacts died with it — including any gate run or Reactor
+  job that held it transiently, which belong to no item and would otherwise be written off with no
+  record at all — and what had already been spent on them. That record is what lets the affected
+  items be requeued with honest history instead of reappearing as mysteries — and a host that
+  accumulates these is a machine to take out of the pool, which is only visible if the losses are
+  counted.
 - **The threshold is the deployment owner's, not the project's** — it belongs in
   [ConfigStore](#configstore--the-deployment-owners-residual) with the rest of arena allocation. A
   CI arena farm may want thirty minutes; a fleet of developer laptops wants to survive a long
@@ -905,11 +1128,11 @@ Reactor's half is four obligations:
 - **`item → arena` is first-class persisted state.** The scheduler dispatches the item's steps to
   that arena; dispatching elsewhere silently discards accumulated state, which is worse than
   refusing outright.
-- **The reservation pins to the item rather than returning to the pool between steps.** This is the
-  [reservation clock](#a-host-that-is-merely-off-is-not-a-host-that-is-gone) already in the model,
-  reassigned rather than released — the *work* lease still dies with each step's process, so
-  [nothing runs unwatched](#nothing-runs-unwatched) is untouched and every step is an ordinary new
-  child watched like any other.
+- **The lease is sticky: it stays with the item rather than returning to the pool between steps.**
+  This is the ordinary arena lease of [the state model](#an-arena-is-in-exactly-one-of-four-states),
+  held across steps rather than released at each process exit — the *work* lease still dies with
+  each step's process, so [nothing runs unwatched](#nothing-runs-unwatched) is untouched and every
+  step is an ordinary new child watched like any other.
 - **Step declarations can relax the binding, and Reactor must honor both forms.** A step declaring
   *arena-independent* may be dispatched anywhere, freeing capacity; a step declaring *fresh session*
   runs on the bound arena but is launched with no inherited agent context. The second is an
@@ -1177,11 +1400,21 @@ responsibilities end at the manifest boundary:
    removed gates retire (history preserved), and changed metric semantics flag for admin review
    rather than silently invalidating baselines.
 2. **Schedule.** Two invocation modes, not one. **Monitors** are picked per host OS × arch ×
-   deployment overrides, honoring each gate's declared cadence. **Preconditions** are not scheduled
-   at all — they are selected by the transition being attempted (`blocks`) and run on the host
-   attempting it. A gate may be both.
-3. **Execute.** Run the declared preflight on a fresh worktree, then the gate command as a
-   subprocess, parse the JSON output envelope from stdout, and write results to `LedgerStore`.
+   deployment overrides, honoring each gate's declared cadence, and placed only on an
+   [`idle`](#an-arena-is-in-exactly-one-of-four-states) arena — so a cadence is a target rather
+   than a promise the pool can always keep, and a missed window is recorded as **contended**.
+   **Preconditions** are not scheduled at all — they are selected by the transition attempted
+   (`blocks`) and run on the host attempting it, inside the lease the attempting step already holds,
+   since that step [inherits the gate's
+   exclusions](#exclusions-are-declared-and-waiting-for-one-is-not-work). A gate may be both.
+3. **Execute.** **Take a transient arena lease**, acquire the gate's `serialized_by` exclusions in
+   canonical order, run the declared preflight on a fresh worktree, then the gate command as a
+   subprocess, parse the JSON output envelope from stdout, and write results to `LedgerStore`. The
+   lease is released when the process exits: a monitor run is a work unit like any other, and
+   differs from an item's only in carrying nothing forward. **A gate run that occupied a machine
+   without holding it would be exactly the flag [the lease
+   rule](#every-exclusion-is-held-by-a-process-never-by-a-flag) forbids** — invisible to capacity
+   pressure, to victim selection, and to the write-off ledger.
 4. **Retain deployment-side config**, keyed by `(project, gate_name)` and layered *on top of* the
    manifest: arena assignment (the project says "I need linux/amd64"; Reactor decides *which*
    linux/amd64 arena), manual overrides (disable, narrow host match, force a cadence, adjust a
@@ -1528,10 +1761,21 @@ edges of process control are missing, and those are P14.
   fleet-wide rather than per item, and resume at the step boundary; process failures are results and
   are never retried unchanged. An unclassified failure is treated as a process failure, because that
   is the mistake that stops.
+- **An arena is in exactly one of four states — `leased`, `reserved`, `idle`, `offline` — and
+  holds at most one lease at a time.** A lease names a *work unit*, not necessarily an item: a
+  scheduled gate run and a job Reactor runs for itself hold one too, transiently, so a machine is
+  never occupied by something the scheduler cannot see. An item's lease is sticky and a transient
+  one is never a victim of capacity pressure; `reserved` keeps a person's own machine out of the
+  pool, on its own expiry because a human cannot be named as a pid; only `idle` accepts a new
+  lease, which makes monitor cadence best-effort with misses recorded as contended. A host is not
+  an arena until **adopted** — a separate, longer-lived trust decision that registration does not
+  confer and a write-off does not revoke. Adoption is of the *host*; an arena is born in the state
+  its host's adoption record names, defaulting closed, and a lapsed reservation returns it there
+  rather than to the pool.
 - **An absent arena is held on a long clock, then written off.** Work leases expire in minutes so
-  the fleet never waits on a machine that went away, but the arena *reservation* survives a
-  temporary absence (default 24h) before being declared lost. Anything left on a lost arena is gone,
-  a returning host is a new arena, and the write-off is recorded in the ledger.
+  the fleet never waits on a machine that went away, but the arena *record* is retained across a
+  temporary absence (default 24h) before the arena is declared lost. Anything left on a lost arena
+  is gone, a returning host is a new arena, and the write-off is recorded in the ledger.
 - **Reactor is a new project, not a migration.** No compatibility with tracker is required — on
   disk, in APIs, or in data. Moving an existing hand-built process onto it is secondary.
 - **GitHub issues = unified source of truth** (no sync world); the space can bifurcate later if
@@ -1557,6 +1801,17 @@ edges of process control are missing, and those are P14.
   `bin/governor` (in the workspace, on other machines or containers).
 - **The server never reaches into a host.** Runners always initiate outbound and long-poll. Cloud
   arena provisioning is the sole exception, since there is no host to run an arena-host runner on.
+- **A governor supervises runners; it is not the machine.** It may be system-wide (launching
+  runners as several OS users) or per user (needing no privilege), and it holds an exclusive lease
+  keyed `(machine, os user)` so two governors can never supervise overlapping sets — locally
+  enforced before the server is reached, and server-side so a cloned image cannot present an
+  adopted machine's identity twice. `host:` exclusions key off the machine, and a sandbox inherits
+  its parent's, so splitting supervision never doubles a box's apparent capacity. The governor
+  knows nothing about items, gates, or arenas — so sandboxes are supervised instead by the
+  arena-host runner that created them, which can do everything a governor can *and* destroy and
+  recreate them. **A sandbox never carries a governor**, however long it lives. Where a governor is
+  needed follows from the outbound-only invariant: a cloud VM has nothing local above it, a local
+  sandbox does.
 - **Keep cloud arenas** — mostly implemented, and the practical way to run cross-platform gates.
 - **The public repos are promise, flow, forge, reactor, and base**; cross-repo deps are versioned
   dependencies, not submodules.
