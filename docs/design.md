@@ -455,49 +455,85 @@ is the [private overlay](#itemstore--composite-identity-github--private-overlay)
 |---|---|---|
 | `open`, unclaimed | exists, nobody holds it | **yes**, if labels and assignee make it eligible |
 | `open`, claimed | leased to an arena, in resolution | yes — to its [bound arena](#an-arena-is-leased-to-an-item-not-to-a-step) |
-| `open`, **blocked** | **ordering** — another item or artifact must land first | no |
-| `open`, **waiting** | **paused for an answer** — a question, or a [grant extension](#the-grant-ladder) | no |
-| `open`, **parked** | **something went bad** — needs a human to diagnose | no |
+| `open`, **paused** | *derived* — carries one or more **holds** | no |
 | `closed`, **resolved** | every declared step satisfied | — |
 | `closed`, **declined** | closed without doing the work | — |
 | `closed`, **moved** | [relocated](#relocation-is-a-link-not-a-closure), carrying a pointer to its successor | — |
 
-> **Every pause states why, and there are exactly three whys:** something must land first
-> (`blocked`), someone must answer (`waiting`), or something went wrong (`parked`).
+### Paused is derived; the holds are what exist
 
-That is the running-state sibling of [nothing terminates into
-ambiguity](#nothing-runs-unwatched) — work does not stop without saying what stopped it.
+An item is not blocked *or* waiting *or* parked. It can be all of them at once — queued behind
+another project, holding an unanswered question, and carrying a fault somebody has to look at. So
+the reasons are not an enumeration to pick from, and the pause is not a thing anyone writes down:
 
-**The three are one family and three diagnoses, and both halves matter.** They share a shape, so the
-scheduler needs a single predicate; they mean different things, so collapsing them into one state
-with a reason field would throw away the content:
+> **A hold is a named reason an item cannot be dispatched, carrying the condition that clears it.
+> `paused` is *derived* from holding at least one, and an item resumes when the last one clears.**
 
-| | Says about the work | Resolved by | A fleet with forty of them |
+**Nothing ever sets `paused`.** A stored pause flag is a second copy of a fact the holds already
+carry, and the two can disagree — the same failure as [a lock that is a flag rather than a
+lease](#every-exclusion-is-held-by-a-process-never-by-a-flag), where nothing releases what nobody
+holds. Here the holds *are* the truth and the state is a question you ask them.
+
+It is also the mirror of how a step runs: a step acquires a *set* of
+[exclusions](#exclusions-are-declared-and-waiting-for-one-is-not-work) and proceeds when it holds
+them all; an item carries a *set* of holds and proceeds when it holds none.
+
+**Four kinds, because they are four different diagnoses:**
+
+| Kind | Says about the work | Cleared by | A fleet with forty |
 |---|---|---|---|
-| `blocked` | nothing is wrong; it is queued behind something | the dependency landing or publishing | may be perfectly healthy — deep dependency chains look like this |
+| `blocked` | nothing is wrong; it is queued behind something | the dependency [landing or publishing](#an-edge-names-a-target-and-a-condition-never-a-version) | may be perfectly healthy — deep dependency chains look like this |
 | `waiting` | nothing is wrong; a person is an input | an answer arriving, or [the window defaulting](engagement-feed.md#questions-with-deadlines) | means the human is the bottleneck |
 | `parked` | **something is wrong** | a human diagnosing it | is a sick fleet |
+| `manual` | a person took it over — *"I'll handle this"* | that person releasing it | is a fleet doing by hand what it cannot yet do itself |
 
-Collapsing them yields one number — *forty items not dispatchable* — which is the number that tells
-an operator nothing. **The scheduler still needs only one predicate**, and gets it: `dispatchable`
-is derived once from the state set, which is cheap and does not require the states to lose their
-meaning.
+**`manual` is not an assignee, and it is not a fault.** An assignee is
+[routing](#the-capability-vocabulary); a `manual` hold stops dispatch outright. Nothing has gone
+wrong and nothing is missing — someone has simply decided to do this one themselves, which is a
+legitimate and permanent part of the system rather than an escape hatch. Like `parked`, no
+mechanical condition clears it, and that is the point: a person took it, a person returns it.
 
-`stuck` is not a fourth state: [loop detection](#every-attempt-must-make-progress) tripping is one
-of the ways something goes bad, so it is a **reason for parking** alongside an unclassified failure
-or a refused grant.
+It is also **the honest measure of what the system cannot yet do autonomously.** For a project whose
+thesis is that agents build and maintain large software, the count of work a human took back by hand
+is the least flattering and most useful number available — worth tracking deliberately rather than
+discovering later.
 
-**Three is exhaustive, and the test for what is missing is one the design already uses.** Plenty of
-other things stop work — a provider outage, an exhausted quota, an unreachable bound arena, a step
-losing a race for a contended lock — and **none of them mark the item**, because none of them say
-anything about *the work*. That is precisely the [infrastructure-versus-process
-test](#infrastructure-failures-and-process-failures-are-different-things) applied to state rather
-than to failure: an item whose arena went away stays `claimed`, and it is the arena that is
-unhealthy.
+A `manual` hold **releases the arena binding** at the next clean boundary, by the same reasoning as
+[blocking](#blocked-is-a-recorded-state-not-a-stall): the agent's accumulated session is worth
+nothing to the person now doing the work, so holding capacity for it is pure waste.
 
-**A grant extension is a question**, not a fault, so it waits rather than parks — which means the
-[grant ladder](#the-grant-ladder) rides the same mechanism as any other decision routed to a human:
-a required role, a window, and a recorded answer.
+Reporting only *forty items paused* is the number that tells an operator nothing. Counting holds by
+kind is the diagnosis — and the counts legitimately **sum to more than the item count**, which is
+information rather than an error: an item carrying three holds is in worse shape than one carrying
+one.
+
+- **Every hold names what clears it**, and a hold whose condition can never be evaluated is refused
+  at creation — the same rule that [refuses an edge closing a
+  cycle](#blocked-is-a-recorded-state-not-a-stall), and what keeps a pause from being a
+  [stall](#reliability--never-stall-never-spin). `parked` is the deliberate exception: its condition
+  is a human, which is exactly what it is for.
+- **Clearing one hold is progress and is recorded as such**, even though nothing dispatches. An item
+  that went from three holds to one is moving; an item that has held the same three for a week is
+  not, and only per-hold history can tell them apart.
+- **Each hold that needs a person is its own [article](engagement-feed.md).** One item can raise two
+  — a question for its author and a fault for an operator — because they need different people and
+  different actions. A single per-item notification would force them into one card that neither
+  reader can act on.
+
+`stuck` is not a fourth kind: [loop detection](#every-attempt-must-make-progress) tripping is one of
+the ways something goes bad, so it is a **reason for parking** alongside an unclassified failure or
+a refused grant. And **a grant extension is a question**, not a fault, so it takes a `waiting` hold
+— which means the [grant ladder](#the-grant-ladder) rides the same mechanism as any other decision
+routed to a human: a required role, a window, and a recorded answer.
+
+**The test for whether a kind belongs is one the design already uses.**
+Plenty of other things stop work — a provider outage, an exhausted quota, an unreachable bound
+arena, a step losing a race for a contended lock — and **none of them place a hold**, because none
+say anything about *the work*. A hold earns its place by answering *what is true of this item*;
+anything that answers *what is true of the fleet* belongs elsewhere. That is the
+[infrastructure-versus-process test](#infrastructure-failures-and-process-failures-are-different-things)
+applied to state rather than to failure: an item whose arena went away stays `claimed`, and it is
+the arena that is unhealthy.
 
 **Three terminal states, and the distinction is load-bearing.** An item closed for being in the
 wrong repo must not read later as one that was refused, which is why `moved` exists alongside
@@ -530,9 +566,9 @@ See [the four states](#an-arena-is-in-exactly-one-of-four-states).
 and retention are separate clocks over the same host; see
 [adoption](#a-host-is-not-an-arena-until-it-is-adopted).
 
-**Eligibility, stated once:** an item is dispatchable when it is `open`, not blocked, not stuck,
-either unclaimed or claimed to the arena being offered, and its `flow:` labels and assignee match
-what the flow declares. Everything else in this section is context for one of those clauses.
+**Eligibility, stated once:** an item is dispatchable when it is `open`, holds no holds, is either
+unclaimed or claimed to the arena being offered, and its `flow:` labels and assignee match what the
+flow declares. Everything else in this section is context for one of those clauses.
 
 ## Persistence
 
