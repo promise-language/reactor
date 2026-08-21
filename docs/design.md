@@ -437,6 +437,74 @@ binary is what stops a step's declared exclusions from drifting from what the st
 Reactor validates. That symmetry is worth preserving, because it means one discovery mechanism
 serves both halves of the system.
 
+## The states, and what they belong to
+
+States are introduced throughout this corpus where they are needed, and written in one register — so
+`blocked`, `contended`, `defaulted`, and `offline` read as one vocabulary. They are not. **They
+belong to six different lifetimes**, and confusing them is the hazard: a scheduler that treats a
+queued step like a blocked item, or an article's disappearance like a question's answer, is wrong in
+a way no individual rule catches.
+
+This is the enumeration. Transitions are governed by the rules in their own sections; what follows
+is which states exist and what they are *about*.
+
+**Item** — the durable work unit. Public state is the code host's (`open`/`closed`); everything else
+is the [private overlay](#itemstore--composite-identity-github--private-overlay) keyed by it.
+
+| State | Means | Dispatchable |
+|---|---|---|
+| `open`, unclaimed | exists, nobody holds it | **yes**, if labels and assignee make it eligible |
+| `open`, claimed | leased to an arena, in resolution | yes — to its [bound arena](#an-arena-is-leased-to-an-item-not-to-a-step) |
+| `open`, blocked | waiting on something named | no |
+| `open`, stuck | [loop detection](#every-attempt-must-make-progress) tripped; surfaced, not retried | no |
+| `closed`, **resolved** | every declared step satisfied | — |
+| `closed`, **declined** | closed without doing the work | — |
+| `closed`, **moved** | [relocated](#relocation-is-a-link-not-a-closure), carrying a pointer to its successor | — |
+
+> **`blocked` is one state with a reason, not several states.** The reason is `edge` (another item
+> or a published artifact), `question` (a human), `grant` (a budget extension), or `arena` (its
+> bound arena is unreachable).
+
+*Parked* is the informal word for blocked-on-a-human; it is not a separate state. To the scheduler
+every reason behaves identically — not dispatchable — and the reason governs *remediation*, never
+dispatch. Two predicates that must always agree is how a dispatcher eventually checks one and misses
+the other.
+
+**Three terminal states, and the distinction is load-bearing.** An item closed for being in the
+wrong repo must not read later as one that was refused, which is why `moved` exists alongside
+`declined` rather than collapsing into it.
+
+**Step run** — one dispatch of one step. Two vocabularies here, and they answer different questions:
+
+| | Vocabulary | Answers |
+|---|---|---|
+| **Protocol** | `satisfied` · `unsatisfied` · `advanced` · `blocked` — plus the scan's `complete` and `handoff` | what the step *reported* ([step resolution](base-engineering.md#step-resolution--steps-dispatch-themselves)) |
+| **Process verdict** | clean exit · non-zero exit · deadline kill · signal · disappeared-without-status | how the *process* ended ([nothing runs unwatched](#nothing-runs-unwatched)) |
+
+`contended` belongs to neither: it is a step that exceeded its **queue** deadline without starting,
+returned to the queue as a [capacity signal rather than a
+defect](#exclusions-are-declared-and-waiting-for-one-is-not-work). It says nothing about the item.
+
+**Question** — `open` · `answered` (a principal answered) · `defaulted` (the window elapsed and the
+system answered) · `withdrawn` (the asker retracted). `answered` and `defaulted` produce an
+identical selection and must never merge, because the second is what
+[calibration](engagement-feed.md#the-feedback-loop-calibrates-estimates-never-the-objective) learns
+from.
+
+**Article** — present or absent, and nothing else. Rank and position are computed per read, so
+*below the fold* is not a state. See [the feed's store](engagement-feed.md#store).
+
+**Arena** — `leased` · `reserved` · `idle` · `offline`, holding at most one lease.
+See [the four states](#an-arena-is-in-exactly-one-of-four-states).
+
+**Host** — adopted or not, which is a trust decision that outlives everything above it. Registration
+and retention are separate clocks over the same host; see
+[adoption](#a-host-is-not-an-arena-until-it-is-adopted).
+
+**Eligibility, stated once:** an item is dispatchable when it is `open`, not blocked, not stuck,
+either unclaimed or claimed to the arena being offered, and its `flow:` labels and assignee match
+what the flow declares. Everything else in this section is context for one of those clauses.
+
 ## Persistence
 
 All three stores ride one **minimal record core** — `Get` / `Put` / `Delete` / `List(ns)` plus
@@ -1855,20 +1923,17 @@ edges of process control are missing, and those are P14.
 What is genuinely undecided. Everything else in this document is a statement about the system, not
 a proposal awaiting approval.
 
-1. **The item lifecycle.** States are introduced where they are needed — claimed, blocked, parked,
-   contended, stuck, moved, defaulted, resolved, declined — and never enumerated in one place, which
-   is a gap for a system whose rule is that nothing terminates into ambiguity.
-2. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
+1. **How a project enters a deployment.** [Host adoption](#a-host-is-not-an-arena-until-it-is-adopted)
    is specified; the equivalent for a project — who authorizes the pairing a `.base/` config
    declares, and where that record lives — is named in
    [base-engineering.md](base-engineering.md#declare-then-authorize) but not specified.
-3. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
+2. **Whether never-stall covers a wait on a person.** Every wait is backed by a live process and a
    deadline; a pinned question is backed by neither and waits by design.
-4. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
+3. **Whether the feed pushes.** It is pull-only today, which suits engaging on your own schedule and
    sits awkwardly with an article that must be seen before its deadline.
-5. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
+4. **What the web surface costs.** The [platform requirements](#platform-requirements--requested-of-promise)
    cover the fleet's needs; the admin UI, the feed's ranker, and its sweep are unpriced.
-6. **The capability vocabulary will keep growing**, and each addition has to answer the same
+5. **The capability vocabulary will keep growing**, and each addition has to answer the same
    question — what does this let an agent reach that `role ∩ step` could not otherwise describe?
 
 ## Decisions locked
