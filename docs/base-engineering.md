@@ -695,8 +695,8 @@ vocabulary](design.md#the-capability-vocabulary) for how the grant is expressed.
 
 ### Visibility is a constraint, not a detail
 
-`workspace` and `tracker` are **private**; `reactor`, `promise`, `flow`, and `forge` are public.
-That asymmetry constrains the layout directly:
+`workspace` and `tracker` are **private**; `reactor`, `promise`, and `base` are public. That
+asymmetry constrains the layout directly:
 
 - **A reusable BASE layer has to be public.** Its whole purpose is that other projects adopt it. If
   it stays inside the private `workspace`, the reusability is theoretical. Extracting the generic

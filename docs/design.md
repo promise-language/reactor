@@ -15,9 +15,14 @@
 ## Context
 
 Reactor is the open-source orchestrator for Bounded-Autonomy Software Engineering —
-`github.com/promise-language/reactor`, dual Apache/MIT, sibling to `promise`, `flow`, and `forge`.
-Those four are **public**, so dependencies among them are ordinary versioned dependencies — no
-submodules, no `replace` directives.
+`github.com/promise-language/reactor`, dual Apache/MIT, sibling to `promise` and `base`. Those three
+are **public**, so dependencies among them are ordinary versioned dependencies — no submodules, no
+`replace` directives.
+
+**`flow` and `forge` are prior art, not participants.** The Go flow SDK and the dev-tooling
+blueprint are earlier implementations whose lessons this design absorbs; what is reusable in them
+folds into `base`. Nothing here derives its shape from either, and where this document says *flow*
+it means [a self-describing agent binary](base-engineering.md#the-principle), never that repo.
 
 Two repos in the picture are **private**: `workspace` (delivery and arena provisioning — see
 [Deployment topology](#deployment-topology--server-governor-runner)) and `tracker` (the predecessor
@@ -2229,7 +2234,8 @@ a proposal awaiting approval.
   needed follows from the outbound-only invariant: a cloud VM has nothing local above it, a local
   sandbox does.
 - **Keep cloud arenas** — mostly implemented, and the practical way to run cross-platform gates.
-- **The public repos are promise, flow, forge, reactor, and base**; cross-repo deps are versioned
+- **The public repos are promise, reactor, and base** — `flow` and `forge` are prior art rather
+  than participants; cross-repo deps are versioned
   dependencies, not submodules.
 - **The BASE layer is one repo**, publishing several independently addressable modules as
   subdirectory modules. Reactor takes the wire types alone, a flow takes wire types plus the common
