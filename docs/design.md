@@ -455,20 +455,49 @@ is the [private overlay](#itemstore--composite-identity-github--private-overlay)
 |---|---|---|
 | `open`, unclaimed | exists, nobody holds it | **yes**, if labels and assignee make it eligible |
 | `open`, claimed | leased to an arena, in resolution | yes — to its [bound arena](#an-arena-is-leased-to-an-item-not-to-a-step) |
-| `open`, blocked | waiting on something named | no |
-| `open`, stuck | [loop detection](#every-attempt-must-make-progress) tripped; surfaced, not retried | no |
+| `open`, **blocked** | **ordering** — another item or artifact must land first | no |
+| `open`, **waiting** | **paused for an answer** — a question, or a [grant extension](#the-grant-ladder) | no |
+| `open`, **parked** | **something went bad** — needs a human to diagnose | no |
 | `closed`, **resolved** | every declared step satisfied | — |
 | `closed`, **declined** | closed without doing the work | — |
 | `closed`, **moved** | [relocated](#relocation-is-a-link-not-a-closure), carrying a pointer to its successor | — |
 
-> **`blocked` is one state with a reason, not several states.** The reason is `edge` (another item
-> or a published artifact), `question` (a human), `grant` (a budget extension), or `arena` (its
-> bound arena is unreachable).
+> **Every pause states why, and there are exactly three whys:** something must land first
+> (`blocked`), someone must answer (`waiting`), or something went wrong (`parked`).
 
-*Parked* is the informal word for blocked-on-a-human; it is not a separate state. To the scheduler
-every reason behaves identically — not dispatchable — and the reason governs *remediation*, never
-dispatch. Two predicates that must always agree is how a dispatcher eventually checks one and misses
-the other.
+That is the running-state sibling of [nothing terminates into
+ambiguity](#nothing-runs-unwatched) — work does not stop without saying what stopped it.
+
+**The three are one family and three diagnoses, and both halves matter.** They share a shape, so the
+scheduler needs a single predicate; they mean different things, so collapsing them into one state
+with a reason field would throw away the content:
+
+| | Says about the work | Resolved by | A fleet with forty of them |
+|---|---|---|---|
+| `blocked` | nothing is wrong; it is queued behind something | the dependency landing or publishing | may be perfectly healthy — deep dependency chains look like this |
+| `waiting` | nothing is wrong; a person is an input | an answer arriving, or [the window defaulting](engagement-feed.md#questions-with-deadlines) | means the human is the bottleneck |
+| `parked` | **something is wrong** | a human diagnosing it | is a sick fleet |
+
+Collapsing them yields one number — *forty items not dispatchable* — which is the number that tells
+an operator nothing. **The scheduler still needs only one predicate**, and gets it: `dispatchable`
+is derived once from the state set, which is cheap and does not require the states to lose their
+meaning.
+
+`stuck` is not a fourth state: [loop detection](#every-attempt-must-make-progress) tripping is one
+of the ways something goes bad, so it is a **reason for parking** alongside an unclassified failure
+or a refused grant.
+
+**Three is exhaustive, and the test for what is missing is one the design already uses.** Plenty of
+other things stop work — a provider outage, an exhausted quota, an unreachable bound arena, a step
+losing a race for a contended lock — and **none of them mark the item**, because none of them say
+anything about *the work*. That is precisely the [infrastructure-versus-process
+test](#infrastructure-failures-and-process-failures-are-different-things) applied to state rather
+than to failure: an item whose arena went away stays `claimed`, and it is the arena that is
+unhealthy.
+
+**A grant extension is a question**, not a fault, so it waits rather than parks — which means the
+[grant ladder](#the-grant-ladder) rides the same mechanism as any other decision routed to a human:
+a required role, a window, and a recorded answer.
 
 **Three terminal states, and the distinction is load-bearing.** An item closed for being in the
 wrong repo must not read later as one that was refused, which is why `moved` exists alongside
@@ -1506,9 +1535,10 @@ extend; running out of quota is an
 resumes on its own when the window resets. Treating the second as the first would ask a human to
 approve spending money that does not exist.
 
-An item waiting on a human grant is **parked**, by the paragraph above: recorded, owned, visible,
-and not spending. That is the case parking exists for, so the ladder needs no separate waiting
-state.
+An item waiting on a human grant is **waiting**, not parked — nothing has gone wrong, a person is
+simply an input ([the states](#the-states-and-what-they-belong-to)). It is recorded, owned, visible,
+and not spending, and it needs no mechanism of its own: an extension request *is* a question, with a
+required role and a window like any other.
 
 ## Step execution — Reactor's half
 
