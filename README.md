@@ -14,6 +14,7 @@ and escalating to a human by design. It succeeds a private predecessor,
 - **[Read the white paper →](WHITEPAPER.md)** — the BASE methodology and the bet behind it.
 - **[Architecture →](docs/design.md)** — the authority model, deployment topology, and the pluggable persistence split.
 - **[The BASE layer →](docs/base-engineering.md)** — flows, gates, the discovery contract, and what a project owns versus what is delivered to it.
+- **[The engagement feed →](docs/engagement-feed.md)** — the single surface the system calls a human to, ranked by regret per minute of attention.
 - **[Promise dev tooling →](docs/promise-forge.md)** — how project tools are built and run once they are written in Promise.
 
 ## The idea
@@ -68,7 +69,10 @@ flows that each project's CI publishes:
 - **The human, by design.** Autonomy by default with *deliberate escalation* —
   the system routes a call to a person (an ambiguous design decision, a gate that
   needs judgment, a PR to review) only when it judges the call should rise,
-  keeping them off the critical path.
+  keeping them off the critical path. What does rise lands in one place: a ranked
+  [feed](docs/engagement-feed.md) any component can post to — a stream engaged with
+  on the human's own schedule, ordered by what it costs to leave each article
+  undone per minute of attention it takes.
 
 Untrusted work — a contributor's, or any untrusted run — is **bracketed by
 trusted gates**: a less-trusted role runs every step *except* pushing to origin
@@ -105,10 +109,10 @@ process and released automatically when that process dies.
 
 ## Status
 
-**Early bootstrap — design, not yet engine.** The repo today is the
-[forge](https://github.com/promise-language/forge) tooling blueprint, the
-licenses, the [white paper](WHITEPAPER.md), and the
-[design docs](docs/design.md).
+**Early bootstrap — design, not yet engine.** The repo today is a Promise skeleton
+under `cmd/reactor`, the Go dev tooling that builds the commit gate, the licenses,
+the [white paper](WHITEPAPER.md), and the [design docs](docs/), where nearly all
+the work so far has gone.
 
 Two objectives govern the work: a **clean, reusable BASE implementation that
 applies to many projects**, and **running reliably unattended for prolonged
@@ -117,9 +121,14 @@ thing between a mistake and damage is what an agent was *able* to do, which is
 why the guardrails are load-bearing rather than decorative.
 
 Settled enough to build against: the process topology, the gate and flow
-contracts, and where each piece lives. Still open: the capability vocabulary the
-authority model is expressed in, and which repo owns the reusable BASE layer.
-A build order is deliberately not fixed until those close.
+contracts, the authority model down to the capability vocabulary it is expressed
+in, and where each piece lives — the reusable layer is
+[`base`](https://github.com/promise-language/base), one repo publishing several
+independently addressable modules. A build order is unblocked but not yet drawn;
+two things gate its *start* rather than its shape — `promise run` argument
+passing, without which no Promise dev tool can take arguments, and the release cut
+that promotes subdirectory modules out of trunk. Neither touches the design, so
+the contract work runs in parallel and is waiting when they land.
 
 Reactor is written in **[Promise](https://github.com/promise-language/promise)**,
 as are the runner, the governor, and the flows — making it the platform's first
@@ -150,26 +159,29 @@ Reactor is one of several sibling repos:
 
 - **[promise](https://github.com/promise-language/promise)** — the language and
   the existence proof: designed so agents write maintainable code, built by agents.
-- **[flow](https://github.com/promise-language/flow)** — the resolution layer:
-  the common library behind self-describing flow binaries.
-- **[forge](https://github.com/promise-language/forge)** — the dev-tooling
-  blueprint Reactor builds on today.
+- **[base](https://github.com/promise-language/base)** — the shared BASE layer:
+  every contract Reactor, flows, and gates speak — wire types, the gate manifest
+  and envelope, flow self-description, authority config — plus the reusable
+  machinery built on them, from the flow common library and gate SDK to arena
+  provisioning and ratcheting baselines.
 - **Reactor** — orchestration: the production line that drains a backlog across
   the arena farm.
+- **[zoo](https://github.com/promise-language/zoo)** — the public gallery where
+  the quality half of the bet is being tested in the open.
 
 Each orchestrated project also has a **companion repo** holding its own BASE
 setup — flow steps, item types, prompts, and authority config — kept outside the
 project source so that fixing a flow never contends with work in flight, and so
 an agent cannot edit the rules that bound it.
 
-How the reusable machinery consolidates is
-[an open question](docs/base-engineering.md#what-lives-where): it is currently
-spread across several of these repos.
+Two earlier repos are prior art rather than plan: the Go `flow` SDK and the
+`forge` dev-tooling blueprint. What is reusable in them is folded into `base` —
+[what lives where](docs/base-engineering.md#what-lives-where) is now settled.
 
 ## Build
 
-Reactor currently uses the forge dev-tooling blueprint — one in-repo Go module
-that compiles every dev tool into `bin/`:
+Reactor's dev tooling is still Go — one in-repo module that compiles every dev
+tool into `bin/`:
 
 ```sh
 ./make        # compile dev tools into bin/ (verify, guard, precommit, setup)
@@ -178,8 +190,8 @@ bin/verify    # the commit gate: format → build → test
 
 `bin/` is gitignored; tools are built on demand, never committed.
 
-That apparatus exists to work around limits of the Go toolchain, and is expected
-to go away rather than be ported — see
+That apparatus exists only to work around limits of the Go toolchain, and is
+expected to go away rather than be ported — see
 [Promise dev tooling](docs/promise-forge.md).
 
 Reactor itself is a Promise program. Install the toolchain from the
