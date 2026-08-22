@@ -2267,6 +2267,12 @@ anyway. It surfaces like anything else: a regression blocking nothing accrues li
 one that fails a gate holds the lock and therefore blocks everything, which the ranking picks up
 without being told.
 
+**The other disposition is a person accepting it** — the metric moved because it was meant to, and
+the new value becomes the floor. That is the same act as a precondition exception approached from
+the other side, so it uses the same grant and the same pinned question, and it is the only
+disposition that may never be automatic: **lowering a floor always requires a person, while creating
+work to restore it does not.**
+
 **Trunk red preempts.** [Invariant 1](base-engineering.md#1-origin-is-always-green-on-every-platform)
 requires that a cross-platform failure be *undone*, not merely filed, so a monitor failing on trunk
 is not an ordinary auto-filed bug: Reactor **files a repair item, and that item holds the project's

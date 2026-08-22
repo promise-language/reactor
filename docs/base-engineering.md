@@ -1278,7 +1278,7 @@ that has not landed must not raise the bar for everyone else, and a rejected one
 | | Measured | Baseline lives | Moved by | On regression |
 |---|---|---|---|---|
 | **Precondition** | during resolution | **in the tree** | the step that lands the change | the change does not land — **prevented** |
-| **Monitor** | on a cadence, after landing | **with its history**, server-side | Reactor, on a run against landed trunk | an item is filed — **detected and undone** |
+| **Monitor** | on a cadence, after landing | **with its history**, server-side | Reactor, on a run against landed trunk | **detected** — then filed, or accepted by a person |
 
 Some measurements simply cannot be taken in the resolution path: a stress run that takes two hours,
 a WASM binary-size check that runs once a day. Their results arrive long after the change landed and
@@ -1297,6 +1297,32 @@ exact and moves only when someone writes a test. A stress-run duration or a bina
 quiet machine ratchets it, and every honest run afterwards reads as a regression. Monitor ratchets
 therefore move on sustained improvement rather than on a single sample, and their tolerance is
 deployment config alongside the [ratchet cap](design.md#gate-execution--reactors-half).
+
+**A detected regression has two dispositions, and only one of them may be automatic.**
+
+| | Means | Who |
+|---|---|---|
+| **File** | the metric should go back; work is created to put it there | may be automatic — the fleet resolves it unattended |
+| **Accept** | the metric was *supposed* to move; the new value becomes the floor | **always a person**, holding `exception.grant` |
+
+> **Lowering a floor always requires a person. Creating work to restore it does not.**
+
+That is the whole asymmetry, and it is why refusing is not a third option here: refusal belongs to
+preconditions, which act before anything lands. By the time a monitor reports, the change is in
+trunk and the only remaining questions are whether to undo it or to admit it was intended.
+
+**Accepting is the same act as a [precondition
+exception](design.md#the-capability-vocabulary)**, arriving from the other direction — prospective
+there, retrospective here — so it needs no separate mechanism: a pinned
+[question](engagement-feed.md#questions-with-deadlines) answered by a role that carries the grant.
+Pinned, because nothing can honestly recommend lowering a quality floor. If a deployment wants a
+default at all, it may only be **file** — the disposition that creates work rather than removes a
+bound.
+
+**An unanswered regression does not become noise**, which is what would otherwise make pinning
+impractical. A standing regression is one [condition
+article](engagement-feed.md#two-article-classes) with a derived key, held while the condition holds
+— not an event re-posted on every monitor run. It rises as it ages instead of repeating.
 
 The rest of this section is about the first kind.
 
