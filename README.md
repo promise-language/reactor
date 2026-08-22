@@ -15,6 +15,7 @@ and escalating to a human by design. It succeeds a private predecessor,
 - **[Architecture →](docs/design.md)** — the authority model, deployment topology, and the pluggable persistence split.
 - **[The BASE layer →](docs/base-engineering.md)** — flows, gates, the discovery contract, and what a project owns versus what is delivered to it.
 - **[The engagement feed →](docs/engagement-feed.md)** — the single surface the system calls a human to, ranked by regret per minute of attention.
+- **[The engineering guide →](docs/engineering-guide.md)** — how code here is written: naming, shape, testing, and what to do when the platform is in the way.
 - **[Promise dev tooling →](docs/dev-tooling.md)** — how project tools are built and run once they are written in Promise.
 
 ## The idea

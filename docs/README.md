@@ -15,6 +15,7 @@ to know what is built, look there, not here.
 | **[design.md](design.md)** | **What Reactor is.** The authority model, identity, the process topology and its trust boundary, persistence, reliability, scheduling, and how steps and gates are executed. | You are building Reactor, or you need to know what the orchestrator guarantees. |
 | **[base-engineering.md](base-engineering.md)** | **What a project must provide, and what BASE provides to it.** The six invariants, flows, the gate contract, step resolution, and what lives in which repo. | You are adopting BASE for a project, or writing a flow or a gate. |
 | **[engagement-feed.md](engagement-feed.md)** | **How the system spends human attention.** The article, ranking by regret per minute, questions and deadlines, and the authority model over what a reader can do from a card. | You are building the feed, or anything that needs to reach a human. |
+| **[engineering-guide.md](engineering-guide.md)** | **How code in this repository is written** — naming, shape, testing, visibility, and what to do when the platform is in the way. Half of it is vendored from Promise's own conventions. | You are writing or reviewing any Promise code here, starting with the wire schemas. |
 | **[dev-tooling.md](dev-tooling.md)** | **How project dev tooling is built and run** once the tools are written in Promise. | You are working on `./make`, `bin/verify`, or the tool bootstrap. |
 
 ## How they fit together
@@ -27,6 +28,11 @@ here for the schema, the same relationship the gate manifest has between the two
 Reactor schedules and executes, a project declares its gates and owns its flow definitions. Read
 along that seam and the two documents interlock rather than overlap — the gate contract is specified
 once, in base-engineering, and referenced from design.
+
+**engineering-guide.md governs code rather than architecture.** It is the only document here that
+constrains *how* something is written rather than *what* it must do, and it is deliberately in this
+tree rather than referenced: a step resolves inside a materialized worktree of this repository and
+nothing else, so a rule kept elsewhere is not in its context when it matters.
 
 **dev-tooling.md is scaffolding**, not architecture. It exists because the Go toolchain forced a
 workaround, and it is expected to be deleted rather than maintained.
