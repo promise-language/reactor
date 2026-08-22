@@ -650,17 +650,36 @@ Reactor itself for a project that has none. The model is not written around any 
 > stable id for each item within a project — plus a display form for both.** Stable means it
 > survives rename and relocation *within that authority*.
 
-- **A project is `authority + that authority's stable project id`.** Two organizations may both have
-  a repository called `promise`; the authority's own id distinguishes them.
-- **Every project is a git repository, so every project is anchored and none is minted.** At
-  minimum a project is its git host and path — `git:example.org/infra/tracker`. The prefix names what
-  that host provides *beyond the tree*: `github:` also owns issues and reviews, `git:` owns only the
-  repository, and a project on a plain git host has its items minted by Reactor because nothing else
-  knows they exist. **The authority for a project and the authority for its items need not be the
-  same**, and saying so is what keeps a host without an issue tracker from being a special case.
-- **An item is `(project, that authority's stable item id)`.** A reference is therefore
-  self-describing and resolves without consulting deployment config, which matters for records that
-  outlive the configuration that produced them.
+- **A project is written as the canonical URL of its repository**, because that is what a git remote
+  already is and what a person already has in hand:
+
+  ```
+  https://github.com/promise-language/promise
+  https://git.example.org/infra/tracker
+  ```
+
+  No bespoke scheme to define, parse, or teach. Two organizations may both have a repository called
+  `promise`; the host and path distinguish them without anything being invented.
+- **The host selects the adapter**, from deployment config. This is strictly better than a
+  `github:` prefix, which conflates *which product* with *which host* and cannot express a
+  self-hosted instance at all — `github.acme.com` is the same adapter and a different authority, and
+  only a host-to-adapter mapping says so.
+- **Every project is a git repository, so every project is anchored and none is minted.** What
+  differs is what the host owns *beyond the tree*: a code host also owns issues and reviews, while a
+  plain git host owns only the repository, and a project on one has its items minted by Reactor
+  because nothing else knows they exist. **The authority for a project and the authority for its
+  items need not be the same** — which is what keeps a host without an issue tracker from being a
+  special case rather than a second model.
+- **Canonicalization is the adapter's job, not a global rule.** The same repository is reachable as
+  `https://…`, as `git@…:…`, with and without `.git`, with a port or without, and whether those are
+  one repository or several is a fact about that host — only its adapter knows. So an adapter
+  supplies a canonical form, and **two references that canonicalize identically are the same
+  project**. The floor the model does impose: never store embedded credentials, and never treat a
+  reference that fails to canonicalize as valid.
+- **An item is `(project, item id)`** — written `<project url>#<id>`, and self-describing enough to
+  resolve without consulting deployment config, which matters for records that outlive the
+  configuration that produced them. Rendering that as whatever URL the host prefers is the adapter's
+  business, not the model's.
 - **The readable path is a label, not the identity.** `owner/repo` is mutable at most hosts:
   transfer a repo away, create a new one at the old path, and every stored reference silently
   resolves to a *different* project. So the path is refreshed from the authority and displayed, and
@@ -669,8 +688,8 @@ Reactor itself for a project that has none. The model is not written around any 
 - **An authority without stable ids says so.** Then its path *is* the identity and a rename is a
   migration. That is an honest property of one adapter rather than a hole in the model, and it is
   [labelled rather than glossed](#where-it-is-enforced) like any other unbacked guarantee.
-- **The authority is part of the identity**, so a project cannot change authority — one that did is
-  a different project. What would otherwise be a rule nobody enforces is structurally impossible.
+- **The host is part of the identity**, so a project that moves hosts is a different project.
+  What would otherwise be a rule nobody enforces is structurally impossible to violate.
 
 **A project is exactly one tree**, which is what makes all of this work: a worktree materializes
 from it, [a change writes to one](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped),
@@ -721,7 +740,7 @@ Four rules, which are the policy a minted id buys back:
 
 | Entity | Identity | Source |
 |---|---|---|
-| **Project** | authority + the authority's stable project id | anchored — always |
+| **Project** | canonical repository URL; stored as the adapter's stable id where it has one | anchored — always |
 | **Item** | `(project, item authority's stable id)` | anchored — minted where the host owns no items |
 | **Principal** | authority + that authority's account id | anchored |
 | **Host** | minted at first registration, pinned to an issued credential | minted |
