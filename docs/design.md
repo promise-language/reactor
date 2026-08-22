@@ -747,14 +747,41 @@ presents a valid identity and nothing notices. Operator-assigned fails the same 
 reason. So:
 
 > **A machine's identity is minted by the server at first registration and pinned to a credential
-> the server issues.** A second claimant presenting a credential already bound to a live
-> registration is detectable, and is refused and recorded rather than admitted.
+> the server issues. Every subsequent registration issues a fresh credential and invalidates the
+> previous one.**
+
+**Rotation is what makes the clone case mechanical rather than hopeful**, and a static credential
+would not. A clone carries the credential file with it, so without rotation the outcome is decided
+by who happens to boot first: clone the machine, register while the original is powered off, and the
+original is refused on its return. With rotation the clone's copy is stale the moment the original
+registers again, and a stale credential is **refused on sight, recorded, and surfaced** — so
+*"this host presented a superseded credential"* is a visible event rather than a silent takeover.
+
+The residual case is a clone taken from a machine that never runs again, which is genuinely
+indistinguishable from that machine moving, and correctly resolves in the clone's favour.
 
 It costs no operator work, and it composes with the arenas Reactor provisions itself, which are
 [already handed a credential at provisioning](#a-host-is-not-an-arena-until-it-is-adopted). A
 sandbox does not mint one: it [inherits its parent machine's `host:`
 identity](#exclusions-are-declared-and-waiting-for-one-is-not-work), because the hardware it
-contends for is its parent's.
+contends for is its parent's — and so it stores nothing.
+
+**Where it lives, on both sides.** Server-side the split follows the one the stores already draw:
+the host record — its minted id, its adoption, the credential currently issued to it — is the
+[deployment owner's residual](#configstore--the-deployment-owners-residual) beside *which hosts are
+adopted*, while presence, health, and the current registration are hot and expiring like every other
+liveness fact, so they are the [ledger's](#ledgerstore--per-server-active-state).
+
+Machine-side it is the **governor's**, held outside any workspace. Not a runner's: runners are
+[one per workspace](#deployment-topology--server-governor-runner), so a host identity kept there
+would exist in as many copies as there are workspaces, with nothing saying which is authoritative —
+and a workspace can be wiped and recreated, which a host identity must survive.
+
+**A host that loses its credential re-registers as a new host and must be adopted again.** That is
+not a harsh policy but the [identity rules](#when-reactor-must-mint) applied: a minted id is never
+reused, and a subject never chooses its own — so a machine cannot reclaim an identity by asserting
+it. Losing the credential is indistinguishable from being a different machine, and treating it as
+one is the only reading that does not hand an identity to whoever claims it loudest.
 
 ### When Reactor must mint
 
