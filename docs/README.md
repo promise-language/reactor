@@ -12,7 +12,7 @@ to know what is built, look there, not here.
 
 | | Defines | Read it when |
 |---|---|---|
-| **[design.md](design.md)** | **What Reactor is.** The authority model, the process topology, persistence, reliability, scheduling, and how steps and gates are executed. | You are building Reactor, or you need to know what the orchestrator guarantees. |
+| **[design.md](design.md)** | **What Reactor is.** The authority model, identity, the process topology and its trust boundary, persistence, reliability, scheduling, and how steps and gates are executed. | You are building Reactor, or you need to know what the orchestrator guarantees. |
 | **[base-engineering.md](base-engineering.md)** | **What a project must provide, and what BASE provides to it.** The six invariants, flows, the gate contract, step resolution, and what lives in which repo. | You are adopting BASE for a project, or writing a flow or a gate. |
 | **[engagement-feed.md](engagement-feed.md)** | **How the system spends human attention.** The article, ranking by regret per minute, questions and deadlines, and the authority model over what a reader can do from a card. | You are building the feed, or anything that needs to reach a human. |
 | **[dev-tooling.md](dev-tooling.md)** | **How project dev tooling is built and run** once the tools are written in Promise. | You are working on `./make`, `bin/verify`, or the tool bootstrap. |

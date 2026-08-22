@@ -416,6 +416,12 @@ necessary:
 > together with nothing versioned between them, they belong in one repo. "This change spans repos
 > atomically" is a report that the split is in the wrong place, not a request for a feature.
 
+**Nor a request for submodules**, which are [not supported](design.md#the-identity-authority-contract)
+and are the usual shape the request takes. A submodule puts a second repository's history inside a
+tree that every mechanism here assumes is one — so a change would write two projects, gates would
+measure a commit nothing gated, and a claim would need two branches with nothing making them land
+together. Vendored content is fine: bytes in the tree are the project's whatever their origin.
+
 #### Discovery files, it does not fix
 
 The common case is not planned at all: a step resolving an item in one project finds the real fix

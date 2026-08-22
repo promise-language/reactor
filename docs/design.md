@@ -103,9 +103,8 @@ twice over: once for a reason specific to it, and once for reliability, which ap
 
 | Seam | Boundary | Why it stays a boundary |
 |---|---|---|
-| flow ↔ Reactor | Reactor HTTP API | **Authority.** Every item mutation must cross a point where the actor's role and the step's grant can be checked. A linked library has no such point. Flows also run in arenas, on other machines. |
-| runner ↔ flow | subprocess | **Authority again.** The runner assembles the step's environment and withholds credentials the step may not use; a sandboxed child process is where that is enforceable. |
-| server ↔ runner | HTTP long-poll | Physically different machines, and the [outbound-only invariant](#deployment-topology--server-governor-runner). |
+| flow ↔ runner | subprocess + loopback | **Authority.** The runner assembles the step's environment, withholds credentials the step may not use, and is the only channel out — [a flow has no network](#a-flow-has-no-network). A sandboxed child process is where that is enforceable. |
+| runner ↔ Reactor | HTTP long-poll | **Authority again**, and the enforcement point: every item mutation a flow makes arrives here [proxied with its attribution stamped](#the-runner-is-the-local-trust-boundary), where role and grant are checked. Also physically different machines, under the [outbound-only invariant](#deployment-topology--server-governor-runner). |
 | Reactor ↔ gates | subprocess + JSON envelope | **Language independence.** A gate may be written in anything; this is the boundary that makes that true. |
 
 The shared reason is reliability. A process is the unit the operating system will actually enforce
@@ -331,7 +330,7 @@ appear, and each addition has to answer the same question — what does this let
 | Orchestration | item.claim · step.dispatch · arena.provision |
 | Deployment | config.read · config.write · secret:`<name>` · `budget.extend:<limit>` · host.adopt |
 | Engagement | article.post · article.resolve:own · `article.act:<operation>` |
-| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` · `fs:<path>`:read/write |
+| Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` (**defaults to none** — see [a flow has no network](#a-flow-has-no-network)) · `fs:<path>`:read/write |
 
 **Placing and clearing a hold are separate grants, and clearing is the dangerous one.** A step that
 could clear its own [`parked` hold](#the-states-and-what-they-belong-to) would be a step deciding
@@ -827,7 +826,7 @@ Four rules, which are the policy a minted id buys back:
 |---|---|---|
 | **Project** | canonical repository URL; stored as the adapter's stable id where it has one | anchored — always |
 | **Item** | `(project, item authority's stable id)` | anchored — minted where the host owns no items |
-| **Principal** | authority + that authority's account id | anchored |
+| **Principal** | authority + that authority's account id; configured directly where there is none | anchored — assignment of the [escalation floor](#adopting-a-project-admits-its-people) is pinned, not derived |
 | **Host** | minted at first registration, pinned to an issued credential | minted |
 | **Arena** | `(host, workspace)`, minted per registration | minted |
 | **Lease holder** | `(host, pid, process start time)` | observed |
@@ -855,9 +854,11 @@ exercise every implementation identically.
 
 ### ItemStore — composite identity (GitHub) + private overlay
 
-GitHub is the single **identity** authority; a private overlay is keyed by that identity — *not*
-two competing populations to sync, which would inevitably leak and mix. One item, loaded by
-merging layers:
+A project's [item authority](#the-identity-authority-contract) owns identity; a private overlay is
+keyed by that identity — *not* two competing populations to sync, which would inevitably leak and
+mix. The layering below is written for a code host, which is the case that has two layers at all; a
+project whose host owns no items has Reactor mint them and the overlay *is* the record. One item,
+loaded by merging layers:
 
 - **Identity + public state = GitHub issues/PRs** (the source of truth, visible to everyone).
   Issues are work definitions. **PRs are first-class items with their own identity** (their PR
@@ -1203,11 +1204,18 @@ out of the other three.
   **timed** — never authoritative — so revocation propagates on expiry rather than requiring anyone
   to remember to mirror it. A stored role assignment is the same defect as a stored `paused` flag:
   a second copy of a fact that can disagree with the fact.
-- **The escalation floor is assigned, never derived.** The rule that
+- **The escalation floor derives its identity and pins its assignment.** The rule that
   [one role must always exist with a live principal behind it](engagement-feed.md#four-rules-that-close-the-remaining-gaps)
-  cannot be satisfied by derivation: a code-host outage or one permission change would remove the
-  last admin, and the deployment would lose the ability to fix its own authority config. At least
-  one principal is assigned deployment-side and depends on nothing external.
+  cannot survive derivation of the *assignment*: one permission change would remove the last admin
+  and the deployment would lose the ability to fix its own authority config. But that is no reason
+  to mint a second identity for a person who already has one. So the split is the same one this
+  section already draws — **identity comes from the authority; the holding of the floor role is
+  recorded deployment-side** and no external change can revoke it.
+
+  Where there is no authority to derive from, the principal is **configured directly**, with a
+  credential issued once. That path is also the honest break-glass: if the authority is unreachable
+  nobody can authenticate through it, and a deployment that wants to stay administrable during an
+  outage configures a principal that does not depend on one.
 - **Derivation is one source, not the mechanism.** A [GitHub-free
   deployment](#itemstore--composite-identity-github--private-overlay) assigns directly, and the rest
   of the model does not change — which is the test that the mapping is a convenience rather than a
@@ -1366,7 +1374,7 @@ long-polled](#deployment-topology--server-governor-runner):
 
 | | Operation |
 |---|---|
-| **Presence** | register (machine id, os, arch, role, capabilities) · renew · report health |
+| **Presence** | register this *arena* (os, arch, role, capabilities), authenticated by the [session token its governor holds](#machine-identity-is-minted-because-the-alternatives-cannot-catch-a-clone) · renew · report health. The **host** is registered by its governor, not by a runner. |
 | **Work** | long-poll for actions · report a step verdict · stream output |
 | **Proxy** | forward a flow's call with the step's attribution stamped |
 | **Leases** | acquire, renew, release — item claims, exclusions, arena bindings |
@@ -2607,8 +2615,9 @@ a proposal awaiting approval.
 - **GitHub issues = unified source of truth** (no sync world); the space can bifurcate later if
   ever needed.
 - **PRs are first-class items** with their own identity; review artifacts are per-PR.
-- **ItemStore = one identity authority per deployment** (GitHub *or* repo, never mixed) **+ an
-  optional repo overlay** keyed by GitHub id for admin/private/large artifacts.
+- **One item authority per project, never two for one item** — a code host where there is one,
+  Reactor's own mint where the host owns no items — **plus an optional private overlay** keyed by
+  that identity for admin, private, and large artifacts.
 - **Reactor is cloud-only**, and one server serves every role; admin accounts and access control
   are required; tracker's OAuth plan is a useful starting reference.
 - **Authority is role ∩ grant**, declared and enforced outside whatever it constrains. For agent
@@ -2697,5 +2706,25 @@ a proposal awaiting approval.
   only escalation pushes.
 - **The admin UI is a Promise web app compiled to WASM**, served from the binary and speaking the
   same JSON APIs as everything else — not a third language, and not a second API surface.
+- **The runner is the local trust boundary; a flow is a guest inside it.** A flow has **no
+  network** — loopback to its runner is its only channel, so the code host, Reactor, and the model
+  API are all reached by proxy and a flow cannot forge which step it is. **The runner runs the
+  agent**, one-shot, which is what makes metering, credential withholding, and
+  mounted-tools-within-grant enforceable rather than advisory. There is no way to run a flow except
+  through a runner, including by hand.
+- **A flow implements three entry points and may ask for thirteen operations**, all through its
+  runner. What it may not do is expressed as absent operations rather than conventions: no network,
+  no agent of its own, no `answer`, no clearing a `parked` or `manual` hold. See
+  [the flow contract](base-engineering.md#the-flow-contract).
+- **A lease names a holder and a subject, and they are never the same.** The holder is always a
+  fleet process — a runner, or a governor for its own lease — because a lease held by the work would
+  depend on a process nothing supervises and could be renewed past its own deadline.
+- **Identity is anchored, then derived, then observed, then minted — minting last.** A project is
+  the canonical URL of its repository and is never minted; an item is `<project url>#<id>`; a
+  machine's identity is minted at first registration and pinned to a credential that rotates on
+  every registration, which is what catches a cloned host. A subject never chooses its own identity,
+  and a derived identity is total and idempotent.
+- **Submodules are not supported.** A project is exactly one tree with one history; composition goes
+  through versioned dependencies, blocking edges, and change sets.
 - **Dev tooling is Go today and is expected to disappear** — `./make`, `bin/verify`, ratcheted
   baselines, guard — replaced by [the Promise tooling model](dev-tooling.md) rather than ported.
