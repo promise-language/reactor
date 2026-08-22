@@ -1163,6 +1163,11 @@ Three subprocess entry points, and no others:
 `describe` is deliberately symmetric with `bin/gate list --json`: a subprocess that emits a manifest
 the system validates. One discovery mechanism serves both halves.
 
+**A step need not run an agent.** `run` may complete without ever calling `agent.run` — the step
+that verifies ratchets and amends a commit is deterministic and better for it, since judgment about
+where a quality floor sits is judgment nobody wants delegated. A mechanical step costs no model
+account, meters nothing, and asks the [grant ladder](design.md#the-grant-ladder) no questions.
+
 ### What the runner supplies
 
 Assembled environment, not arguments a flow could forge: the item and step it is running, the
@@ -1187,6 +1192,7 @@ endpoint itself.
 | | `hold.place:<kind>` | `blocked`, `waiting`, or `parked` |
 | **Agent** | `agent.run` | one prompt, one completed run; the runner mounts tools, holds credentials, and meters |
 | **Gates** | `gate.run` · `gate.results.read` | the runner executes; the flow asks |
+| | `baseline.update` | mechanical — verifies the ratchets and writes the new values; the [baseline file is a denied path](design.md#the-capability-vocabulary), so this is the only way it changes |
 | **VCS** | `vcs.push:branch:own` · `vcs.pr.create` | proxied — a grant over what the runner does on the flow's behalf, not permission to open a connection |
 | **Engagement** | `article.post` · `article.resolve:own` | [feed articles](engagement-feed.md#the-article) |
 
@@ -1220,17 +1226,18 @@ Not conventions — the absence of an operation, an environment variable, or a r
 - **Run outside a runner.** [Including when a developer runs
   it](design.md#there-is-no-way-to-run-a-flow-except-through-a-runner).
 
-### Open in this contract
+### Three things this contract settles
 
-1. **Does a flow claim its item, or is it handed one?** The README describes a flow that *"claims
-   one eligible item"*; [step resolution](#step-resolution--steps-dispatch-themselves) has Reactor
-   scanning and dispatching. Both cannot be true, and the difference decides whether `item.claim` is
-   an operation here at all.
-2. **May a step ever clear a hold it placed?** A `blocked` hold clears mechanically when its edge
-   resolves and a `waiting` hold when an answer lands, so there may be no case left — but
-   "no case" and "no capability" should be stated rather than inferred.
-3. **Who writes gate baselines and grants exceptions.** Both are in the
-   [vocabulary](design.md#the-capability-vocabulary) and neither is assigned to an actor.
+1. **A flow is handed its item; it never claims one.** Reactor decides eligibility and dispatch, and
+   the runner takes the claim lease before the flow is invoked for a specific item and step — so
+   `item.claim` is not an operation here at all. What loops is the runner's long-poll, not the flow.
+2. **A step never clears a hold.** A `blocked` hold clears when its edge resolves, a `waiting` hold
+   when an answer lands, and `parked` and `manual` need a person by definition — so no case remains,
+   and `hold.clear` belongs only to humans and to Reactor.
+3. **Baselines are the step's and exceptions are a human's.** `baseline.update` is mechanical and
+   happens at landing; an exception is permission to regress a ratchet, which is asked as a pinned
+   [question](engagement-feed.md#questions-with-deadlines) and answered by a role that carries the
+   grant. Neither is ever an agent's judgment.
 
 ## Gate discovery — the project declares, Reactor discovers
 
@@ -1261,11 +1268,59 @@ The two kinds differ in nearly every property:
 | Metrics | compared against the baseline; never move it | compared, and ratchet the baseline on success |
 | Host | must be the host doing the transition | any eligible arena |
 
-**Ratcheting is a monitor act, not a precondition one.** Both read the baseline — a precondition
-that ignored it could not catch a coverage or test-count regression, which is exactly what it is
-for — but only a run against *landed* trunk may move it. A candidate tree that has not landed must
-not raise the bar for everyone else, and a rejected one must not lower it. That asymmetry is the
-sign these were never one thing.
+**Both read the baseline; only landing moves it.** A precondition that ignored the baseline could
+not catch a coverage or test-count regression, which is exactly what it is for. But a candidate tree
+that has not landed must not raise the bar for everyone else, and a rejected one must not lower it.
+
+> **There are two kinds of baseline, and which one a metric gets is decided by when its measurement
+> is available.**
+
+| | Measured | Baseline lives | Moved by | On regression |
+|---|---|---|---|---|
+| **Precondition** | during resolution | **in the tree** | the step that lands the change | the change does not land — **prevented** |
+| **Monitor** | on a cadence, after landing | **with its history**, server-side | Reactor, on a run against landed trunk | an item is filed — **detected and undone** |
+
+Some measurements simply cannot be taken in the resolution path: a stress run that takes two hours,
+a WASM binary-size check that runs once a day. Their results arrive long after the change landed and
+often describe a commit several behind, so there is nothing left to amend them into and nothing to
+refuse. Forcing them into the tree would mean either blocking every landing for two hours or
+committing a number about the wrong commit.
+
+That is the same split as [preconditions and monitors](#preconditions-and-monitors-are-different-things)
+themselves, and the same [materiality test](design.md#where-it-is-enforced) the authority model uses:
+a restriction counts as enforced if a violation is **prevented**, *or* **detected and undone**. A
+monitor baseline takes the second path because the first is not available to it.
+
+**A monitor baseline needs tolerance; a precondition baseline mostly does not.** A test count is
+exact and moves only when someone writes a test. A stress-run duration or a binary size is a
+*measurement*, with variance — so raising the bar on any single improvement means one lucky run on a
+quiet machine ratchets it, and every honest run afterwards reads as a regression. Monitor ratchets
+therefore move on sustained improvement rather than on a single sample, and their tolerance is
+deployment config alongside the [ratchet cap](design.md#gate-execution--reactors-half).
+
+The rest of this section is about the first kind.
+
+> **A precondition's baseline travels with the tree, and is moved by the step that lands the
+> change — never on a schedule.**
+
+That is not a convenience. **A baseline raised out-of-band makes in-flight work uncommittable**:
+every arena branched before the raise carries the older file, and their landings then either
+conflict on it or fail a ratchet they were never given a chance to meet. A monitor updating trunk's
+baseline on its own cadence would do exactly that, to every arena at once, on a timer nobody
+correlated with the failures.
+
+Moving it at landing satisfies the asymmetry instead of working around it: the update is amended
+into the commit that becomes trunk, so a raise that never lands never happened, and a rejected
+candidate takes its baseline change with it.
+
+**And the update is mechanical, not a judgment.** Once the gates pass and the ratchets verify, the
+new values are written and the commit amended. Nothing is asked of an agent, which matters because
+this is the one place where an agent's judgment would be a hazard rather than a feature: a model
+that can *decide* what the quality floor is has been handed the floor.
+
+**So the agent never edits the baseline — it invokes an operation that updates it.** The file is a
+[denied path](design.md#the-capability-vocabulary) in every tree-write grant, exactly as that
+carve-out already proposed, and the deny is safe only because this sanctioned path exists.
 
 So a gate gains a `blocks` field, orthogonal to `schedule` — a gate may do both, blocking a push
 *and* running every four hours to catch flakiness and environmental drift. **`blocks` values are

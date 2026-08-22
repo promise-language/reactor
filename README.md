@@ -44,9 +44,10 @@ flows that each project's CI publishes:
 
 - **Durable intent.** Work items are GitHub issues — the single source of truth —
   and design-decision docs in version control, not a chat that scrolls away.
-- **An autonomous loop.** A *flow* is a self-describing binary that claims one
-  eligible item, resolves it, and produces a PR (or a gated, merged change) —
-  once on demand, or looping until a stop condition: quota, cost cap, or an
+- **An autonomous loop.** A *flow* is a self-describing binary that resolves one
+  item — a step at a time — and produces a PR, or a gated, merged change. It is
+  handed its work rather than taking it: the runner polls, Reactor decides what
+  is eligible, and the loop runs until a stop condition — quota, cost cap, or an
   empty queue.
 - **Bounded authority.** Every actor has a role, and every step of every flow
   declares what it may touch. Effective authority is the intersection, enforced

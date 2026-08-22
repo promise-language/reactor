@@ -332,6 +332,32 @@ appear, and each addition has to answer the same question — what does this let
 | Engagement | article.post · article.resolve:own · `article.act:<operation>` |
 | Tool surface | `mcp:<server>/<tool>` · shell · `net.egress:<host>` (**defaults to none** — see [a flow has no network](#a-flow-has-no-network)) · `fs:<path>`:read/write |
 
+**`baseline.write` is a step's where the baseline is in the tree.** A [precondition's baseline
+travels with the tree](base-engineering.md#preconditions-and-monitors-are-different-things) and
+moves only when a change lands, so that grant belongs to the step that lands it — not to an agent's
+judgment. A **monitor's** baseline is Reactor's, moved from its own history, because its measurement
+arrives after there is anything left to land.
+
+**The tree baseline is a denied path** in every tree-write grant, and the step updates it by
+invoking an operation rather than by editing: a step that may write baselines and may not spawn an
+agent is exactly what `role ∩ step` is for, and it puts the quality floor beyond the reach of the
+thing being measured against it.
+
+**Not every step runs an agent**, and this is the clearest case. A step whose whole job is *verify
+the ratchets and amend the commit* is deterministic — no model account, nothing metered against a
+[grant ladder](#the-grant-ladder), nothing to go wrong creatively. The corpus reads as though every
+`run` is an agent session; it is not, and the mechanical kind is both the cheapest and the one to
+prefer wherever judgment would be a liability.
+
+**`exception.grant` is a human's, and it is a question.** An exception is permission to *regress* a
+ratchet, so nothing may propose a default for it — a recommendation to lower a quality floor is not
+one any step can honestly make. The mechanical step that finds a regression
+[asks](engagement-feed.md#questions-with-deadlines), pinned; a principal whose role carries the
+grant answers; Reactor verifies the approval before the operation applies it. That is
+[role ∩ action](#a-human-acting-directly-is-bounded-the-same-way) — a person taking an act they were
+already entitled to take — and **not** an answer widening a grant, which the rules forbid. The
+project then carries a visible active-exception condition for as long as one stands.
+
 **Placing and clearing a hold are separate grants, and clearing is the dangerous one.** A step that
 could clear its own [`parked` hold](#the-states-and-what-they-belong-to) would be a step deciding
 that whatever went wrong is fine now, and one that could clear a `manual` hold would be taking work
@@ -2213,12 +2239,33 @@ responsibilities end at the manifest boundary:
 4. **Retain deployment-side config**, keyed by `(project, gate_name)` and layered *on top of* the
    manifest: arena assignment (the project says "I need linux/amd64"; Reactor decides *which*
    linux/amd64 arena), manual overrides (disable, narrow host match, force a cadence, adjust a
-   ratchet cap, downgrade a metric during an incident, grant temporary exceptions), and metric
-   history / baselines / ratchet state.
+   ratchet cap and its tolerance, downgrade a metric during an incident), **metric history** — the
+   record of what every run measured — and **monitor baselines**.
+
+   **Only monitor baselines.** A [precondition's baseline travels with the
+   tree](base-engineering.md#preconditions-and-monitors-are-different-things) and is moved by the
+   step that lands a change; holding that one server-side would let it move out-of-band, which is
+   what makes in-flight work uncommittable. A monitor's baseline has no such option — a two-hour
+   stress run or a daily size check reports long after landing, about a commit that may already be
+   several behind, so there is nothing to amend it into. It lives here, with the history it is
+   derived from, and **moves on sustained improvement rather than on a single sample**, because the
+   metrics that need monitors are measurements with variance rather than exact counts.
 
 **Layering rule: the manifest defines the contract; deployment overrides constrain or annotate
 it.** Overrides never *add* metrics or change a metric's direction — those are gate-contract
 concerns owned by the project. Reactor never silently invents fields the project didn't declare.
+
+**A monitor regression is not the same as a monitor failure, and the responses differ.** A gate that
+*fails* on trunk is the case below. A gate that passes while a ratcheted metric moves the wrong
+way — binary size up three percent, a stress run slower — has found something real without finding
+anything broken, so it files an item the fleet can resolve unattended and **does not hold the
+integration lock**. Holding every landing in a project for a three percent size regression would be
+the wrong trade, and [an item with an owner and a resolution path beats parking for a
+human](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped)
+anyway. It surfaces like anything else: a regression blocking nothing accrues little
+[regret](engagement-feed.md#ranking--regret-per-minute-of-attention) and ranks accordingly, while
+one that fails a gate holds the lock and therefore blocks everything, which the ranking picks up
+without being told.
 
 **Trunk red preempts.** [Invariant 1](base-engineering.md#1-origin-is-always-green-on-every-platform)
 requires that a cross-platform failure be *undone*, not merely filed, so a monitor failing on trunk
