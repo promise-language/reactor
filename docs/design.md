@@ -695,6 +695,39 @@ Reactor itself for a project that has none. The model is not written around any 
 from it, [a change writes to one](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped),
 its gates are built from its commit, and `project:` scopes exclusions against it.
 
+> **Submodules are not supported.** A project's tree is one repository with one history, and a
+> pointer to another repository's history is not part of it.
+
+This is not a preference about repository layout. A submodule makes one tree pretend to be several,
+and almost every mechanism here assumes the equivalence it breaks:
+
+- **A change would no longer write to one project.** Editing inside a submodule writes another
+  repository — different authority, different gates, different companion, different read scope — so
+  an agent would cross a project boundary with none of the machinery meant to govern crossing it.
+- **"Built from the commit under test" loses its referent.** Bumping a submodule pointer changes
+  what the gates measure without any gate having run on the thing that changed.
+- **The branch mapping stops being total.** [A branch is a pure function of its
+  claim](base-engineering.md#branches-are-mechanical-and-there-is-exactly-one-per-claim) and every
+  claim has exactly one — but a claim spanning a superproject and a submodule needs two, in two
+  histories, with nothing making them land together.
+- **The integration lock is per project**, and a submodule change needs another project's lock,
+  which the model has no way to ask for.
+
+**The supported composition is the one already here**: [versioned
+dependencies](#context), with [blocking edges](#an-edge-names-a-target-and-a-condition-never-a-version)
+for ordering and [change sets](#change-sets-group-they-are-never-resolved) for grouping. That is
+what [a repo boundary must be drawn where a version boundary can
+exist](base-engineering.md#coupling-goes-through-versions-so-ordering-is-enough) means in practice —
+and *"this change spans repos atomically"* is a report that the split is in the wrong place, not a
+request for submodules. **Vendored content is fine**: bytes in the tree are the project's, whatever
+their origin. What is not fine is a second history hanging off it.
+
+**The cost is real and worth stating.** A project that uses submodules today cannot be orchestrated
+without restructuring first. That is a genuine limitation rather than a temporary gap, and it should
+be discovered at [adoption](#a-repo-is-not-a-project-until-it-is-adopted) — a tree carrying
+submodule pointers fails the pairing loudly, instead of materializing half a worktree and failing
+somewhere confusing later.
+
 **A board is never an authority.** A code host's cross-repo project boards are views over items that
 live elsewhere, plus drafts that live nowhere and have no tree, no gates, and no commit. They are
 [a render target, never a source](#an-edge-names-a-target-and-a-condition-never-a-version), and
