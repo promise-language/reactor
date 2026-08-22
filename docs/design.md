@@ -777,6 +777,31 @@ Machine-side it is the **governor's**, held outside any workspace. Not a runner'
 would exist in as many copies as there are workspaces, with nothing saying which is authoritative —
 and a workspace can be wiped and recreated, which a host identity must survive.
 
+**Holding it does not make the governor smart.** The governor
+[cannot self-update](#deployment-topology--server-governor-runner), so anything in it must be stable
+enough never to need changing — and rotation is, because the split leaves no decisions there:
+**rotation is server-side policy, and the governor's whole part is to present what it has and store
+what comes back.** When to rotate, what a superseded credential means, and what gets recorded all
+live on the server, so none of it grows the component that cannot be patched. It needs no primitive
+the governor does not already require for [swapping binaries
+atomically](#what-the-split-costs-in-promise). Holding a credential is not optional for it in any
+case: fetching the runner binary at first start already means reaching the server and being allowed
+to.
+
+**A runner never holds the durable host credential.** The governor registers the host, receives a
+short-lived **session token**, and hands that to the runners it starts. Three things follow:
+
+- **"Which runner holds the host identity" has the answer *none*.** The durable secret has exactly
+  one holder per machine, which is what made keeping it in a workspace incoherent.
+- **It survives the restart rule without special handling.** [A runner restart adopts
+  nothing](#nothing-runs-unwatched) — a restarted runner simply asks its governor for a fresh token
+  rather than recovering anything.
+- **A compromised workspace yields a short-lived token scoped to one arena**, not the machine's
+  identity.
+
+A clone can keep fetching fleet binaries with its stale credential until it tries to register, and
+that is harmless: those binaries go to every host in the deployment and are not secret.
+
 **A host that loses its credential re-registers as a new host and must be adopted again.** That is
 not a harsh policy but the [identity rules](#when-reactor-must-mint) applied: a minted id is never
 reused, and a subject never chooses its own — so a machine cannot reclaim an identity by asserting
