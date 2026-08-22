@@ -588,6 +588,161 @@ and retention are separate clocks over the same host; see
 unclaimed or claimed to the arena being offered, and its `flow:` labels and assignee match what the
 flow declares. Everything else in this section is context for one of those clauses.
 
+## Identity
+
+Every durable record in this system names something — an item, a step run, the holder of a lease,
+the target of a blocking edge. A name that can be forged, silently reused, or repointed at a
+different thing is worse than no name, because it fails plausibly and late.
+
+The corpus arrived at good identities in six places and left a dozen as free strings or as nothing
+at all. The pattern in that is exact and worth stating rather than rediscovering: **everything that
+came out well got its identity from somewhere other than Reactor.**
+
+### Where an identity comes from
+
+> **Anchored, then derived, then observed, then minted. Minting is the last resort, not the
+> default.**
+
+| Source | Meaning | Examples |
+|---|---|---|
+| **Anchored** | an external authority owns it and guarantees uniqueness | a project, an item, a principal |
+| **Derived** | a pure function of what it names | a branch from its claim, a checkpoint from `(item, step)` |
+| **Observed** | read from the machine, verifiable at any moment | a lease holder's `(host, pid, start time)` |
+| **Minted** | Reactor assigns it because nothing else can | a step run, a change set, a host |
+
+The order is not aesthetic. An anchored id cannot be forged by anything inside this system; a
+derived one cannot drift from the thing it names; an observed one can be *checked* rather than
+believed. A minted one has none of those properties and has to buy them back with policy, which is
+why it goes last.
+
+### Five questions every identity answers
+
+Asked once here so no entity has to invent its own answers:
+
+1. **Where does it come from** — anchored, derived, observed, or minted.
+2. **What is it unique within** — globally, a deployment, a project, an item.
+3. **What does it survive** — process restart, machine reboot, rebuild, rename, re-registration.
+4. **Can the subject choose it.**
+5. **What happens on collision or reuse.**
+
+### Two rules the corpus already follows in three places each
+
+> **A subject never chooses its own identity.**
+
+An article's `source` is [stamped, never claimed](engagement-feed.md#source--who-created-it); a flow
+[cannot lie about which step it is](#a-flow-has-no-network) because it never speaks to Reactor;
+`.base/` is [a claim checked against a fact](#a-repo-is-not-a-project-until-it-is-adopted). Identity
+asserted by the thing being identified is not identity — it is a request.
+
+> **A derived identity is total and idempotent.**
+
+Already stated for [branch names](base-engineering.md#branches-are-mechanical-and-there-is-exactly-one-per-claim)
+— every claim has exactly one branch, creating it twice creates one — and it generalizes unchanged
+to every other derived id. Totality is what makes orphans detectable by set difference rather than
+by search.
+
+### The identity authority contract
+
+A project's items are owned by an **authority**: a code host today, another tracker later, or
+Reactor itself for a project that has none. The model is not written around any of them.
+
+> **An authority supplies a stable id for each project it owns and, where it owns their items, a
+> stable id for each item within a project — plus a display form for both.** Stable means it
+> survives rename and relocation *within that authority*.
+
+- **A project is `authority + that authority's stable project id`.** Two organizations may both have
+  a repository called `promise`; the authority's own id distinguishes them.
+- **Every project is a git repository, so every project is anchored and none is minted.** At
+  minimum a project is its git host and path — `git:example.org/infra/tracker`. The prefix names what
+  that host provides *beyond the tree*: `github:` also owns issues and reviews, `git:` owns only the
+  repository, and a project on a plain git host has its items minted by Reactor because nothing else
+  knows they exist. **The authority for a project and the authority for its items need not be the
+  same**, and saying so is what keeps a host without an issue tracker from being a special case.
+- **An item is `(project, that authority's stable item id)`.** A reference is therefore
+  self-describing and resolves without consulting deployment config, which matters for records that
+  outlive the configuration that produced them.
+- **The readable path is a label, not the identity.** `owner/repo` is mutable at most hosts:
+  transfer a repo away, create a new one at the old path, and every stored reference silently
+  resolves to a *different* project. So the path is refreshed from the authority and displayed, and
+  the stable id is what is stored — the same relationship [a code host board has to the edges it
+  renders](#an-edge-names-a-target-and-a-condition-never-a-version).
+- **An authority without stable ids says so.** Then its path *is* the identity and a rename is a
+  migration. That is an honest property of one adapter rather than a hole in the model, and it is
+  [labelled rather than glossed](#where-it-is-enforced) like any other unbacked guarantee.
+- **The authority is part of the identity**, so a project cannot change authority — one that did is
+  a different project. What would otherwise be a rule nobody enforces is structurally impossible.
+
+**A project is exactly one tree**, which is what makes all of this work: a worktree materializes
+from it, [a change writes to one](base-engineering.md#5-a-change-writes-to-one-project-and-reads-only-what-it-was-scoped),
+its gates are built from its commit, and `project:` scopes exclusions against it.
+
+**A board is never an authority.** A code host's cross-repo project boards are views over items that
+live elsewhere, plus drafts that live nowhere and have no tree, no gates, and no commit. They are
+[a render target, never a source](#an-edge-names-a-target-and-a-condition-never-a-version), and
+cross-repo work has its own answer already: a [change set](#change-sets-group-they-are-never-resolved).
+The word collides — *project* means an orchestrated codebase here and a board there — and only one
+of them is a thing this system can resolve.
+
+### Machine identity is minted, because the alternatives cannot catch a clone
+
+A machine is the one identity where being wrong is a security failure rather than a bookkeeping one:
+`host:` exclusions key off it, [adoption](#a-host-is-not-an-arena-until-it-is-adopted) keys off it,
+it is the `host` in every lease triple, and the design already requires catching
+[two machines presenting one identity](#deployment-topology--server-governor-runner).
+
+Hardware-derived identity fails exactly there — a cloned VM inherits it perfectly, so the clone
+presents a valid identity and nothing notices. Operator-assigned fails the same way for the same
+reason. So:
+
+> **A machine's identity is minted by the server at first registration and pinned to a credential
+> the server issues.** A second claimant presenting a credential already bound to a live
+> registration is detectable, and is refused and recorded rather than admitted.
+
+It costs no operator work, and it composes with the arenas Reactor provisions itself, which are
+[already handed a credential at provisioning](#a-host-is-not-an-arena-until-it-is-adopted). A
+sandbox does not mint one: it [inherits its parent machine's `host:`
+identity](#exclusions-are-declared-and-waiting-for-one-is-not-work), because the hardware it
+contends for is its parent's.
+
+### When Reactor must mint
+
+Four rules, which are the policy a minted id buys back:
+
+- **Server-side only.** Nothing outside Reactor mints an identity Reactor will trust.
+- **Opaque.** A minted id carries no meaning, so nothing can be inferred from it and nothing breaks
+  when what it names changes.
+- **Never chosen by the subject**, per the rule above.
+- **Never reused.** Not after deletion, not after a write-off, not after a host is
+  [declared lost](#a-host-that-is-merely-off-is-not-a-host-that-is-gone). Reuse is what makes a stale
+  reference resolve to the wrong thing instead of to nothing, and resolving to nothing is the
+  outcome worth having.
+
+### What everything is named by
+
+| Entity | Identity | Source |
+|---|---|---|
+| **Project** | authority + the authority's stable project id | anchored — always |
+| **Item** | `(project, item authority's stable id)` | anchored — minted where the host owns no items |
+| **Principal** | authority + that authority's account id | anchored |
+| **Host** | minted at first registration, pinned to an issued credential | minted |
+| **Arena** | `(host, workspace)`, minted per registration | minted |
+| **Lease holder** | `(host, pid, process start time)` | observed |
+| **Step** | its name in the flow's `describe`, unique within that flow | anchored in the flow |
+| **Step run** | minted | minted |
+| **Artifact · checkpoint** | `(item, step)` | derived |
+| **Hold** | `(item, kind, what it waits on)` | derived |
+| **Question** | minted, on the item | minted |
+| **Article** | its `key` — [derived for a condition](engagement-feed.md#two-article-classes) | derived |
+| **Change set** | minted | minted |
+| **Blocking edge** | `(waiting item, target, condition)` | derived |
+| **Gate** | `(project, name from the manifest)` | anchored in the tree |
+| **Flow binary** | `(project, os, arch)` + content hash | anchored in the build |
+| **Branch** | a pure function of its claim | derived |
+| **Per-run credential** | minted, single use, scoped to one step run | minted |
+
+Five minted entities out of eighteen, and each is a case where nothing outside Reactor knows the
+thing exists.
+
 ## Persistence
 
 All three stores ride one **minimal record core** — `Get` / `Put` / `Delete` / `List(ns)` plus
