@@ -5,9 +5,11 @@
 > governor, and the wire modules; a project's own gates may be written in anything and are governed
 > by their own project.
 >
-> **It assumes** [design.md](design.md) for what the system is, and Promise's own
+> **It assumes** [design.md](design.md) for what the system is. **Its shared half is vendored from
+> [`base`](https://github.com/promise-language/base/blob/main/docs/engineering-guide.md)**, which is
+> the source when the two disagree, and which in turn derives the language-level rules from Promise's
 > [`docs/code-style.md`](https://github.com/promise-language/promise/blob/main/docs/code-style.md)
-> and `CLAUDE.md`, from which the shared half of this guide is derived.
+> and `CLAUDE.md`.
 >
 > **Enforcement is stated per rule and is mostly not built yet.** A rule with no check behind it is
 > marked *advisory*, deliberately — see [Enforcement](#enforcement).
@@ -30,9 +32,11 @@ tree are the project's whatever their origin. Two honest consequences:
   restated. So a gate cannot diff this against upstream, and reconciling the two is a periodic
   human act until [the shared layer](base-engineering.md#what-lives-where) has a home that every
   project can vendor from.
-- **It should not stay Reactor's.** Every repository in the organization holding Promise code needs
-  the same guide, which makes it BASE-layer material like everything else generic here. Vendoring
-  from `base` is the intended end state; vendoring from `promise` is where it starts.
+- **The source is `base`, not this file.** Every repository in the organization holding Promise code
+  needs the same guide, so the generic half lives in the BASE layer and each repository vendors it.
+  What is Reactor's is added here — the enforcement table, the design cross-references, and the
+  places where a rule bites harder because this is the long-running process. When this copy and
+  `base` disagree about a shared rule, `base` is right.
 
 ## Naming
 
