@@ -161,6 +161,42 @@ per-section status banner. **A list of requests against another project is a rec
 its upstream issues rather than describing their current state, so the tracker stays the authority
 and a row retires when its issue closes.
 
+## Finish it, or file what is left
+
+> **A change is done when it satisfies the normative document. Until then, the difference is an
+> issue — filed before the change lands, not after.**
+
+Landing something partial is allowed and often right. Landing it *silently* is not, and the two are
+indistinguishable from outside: an implementation that is mostly there reads exactly like one that
+is finished. The document says the feature exists, the code does most of it, and nothing anywhere
+records the rest.
+
+What that costs is paid by someone else, later, at the wrong rate. They meet the missing part as a
+**defect** rather than as known work — spending the diagnosis budget of a bug to rediscover
+something that was understood perfectly well at the time, and often finding the gap was deliberate.
+A feature that is 90% done and unrecorded is worse than one not started, because it looks available:
+people build on it before they find the edge.
+
+This is the [no-`TODO` rule](#comments-and-documentation) one level up. A `TODO` is at least a
+marker sitting where a reader might pass it; an unrecorded gap in working code has no marker at all.
+Both resolve the same way — **the tracker is the single source of truth for undone work** — and this
+one matters more, because it is the one nothing will ever remind you of.
+
+- **The normative document defines done, not the diff.** "Everything I set out to write, I wrote" is
+  not the test. The test is whether the document is now true. Where it is not, that delta is the
+  issue, and the document stays as written. It defines a destination, so editing it down to match a
+  partial implementation does not record progress — it destroys the only statement of where the work
+  was going, and quietly makes the unbuilt half unbuilt on purpose.
+- **File before landing.** *"I will file it after"* is the promise a `TODO` makes, and it decays the
+  same way. The issue existing is part of the change being finishable, not follow-up to it.
+- **The issue says what is missing, not that something is missing.** *"Improve module handling"* is a
+  `TODO` with a number on it. What shape of input is dropped, what the second call site does, what
+  the document claims that the code does not yet do — written while it is still in your head, because
+  that is the only moment it is cheap.
+- **A gap found in someone else's work is filed the same way**, whether or not you are the one to
+  close it. Discovering that a feature handles the first case and not the second and moving on
+  without a record is how the gap gets rediscovered a third time.
+
 ## Do not work around the platform
 
 > **When the language, compiler, runtime, or tooling is in the way, file it upstream and stop.**
