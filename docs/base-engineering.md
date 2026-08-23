@@ -1253,7 +1253,7 @@ the source of truth for gate *identity*, *runtime*, *eligibility*, and *metric s
 ### Preconditions and monitors are different things
 
 The manifest as originally drafted could only describe **monitors**. Its `schedule` vocabulary —
-`every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual` — is entirely retrospective;
+`every <dur>`, `after-every-commit`, `manual` — is entirely retrospective;
 `after-every-commit` says *after*, measuring a commit that already exists. There was no way to
 express "this transition does not happen unless this is green", which is the only thing verify is.
 
@@ -1484,7 +1484,7 @@ point head-only and every-commit are the same thing and the question stops exist
 | `gates[].host_arch` | Optional `amd64` / `arm64` filter — lets a project target "linux arm64" separately from "linux amd64" without a target-triple grammar. Omitted ≡ any. |
 | `gates[].timeout` | Duration (`30m`, `2h`). Bounds *work*, not queue wait — [invariant 3](#3-serialization-is-declared-and-waiting-for-it-is-not-work). |
 | `gates[].blocks` | Transitions this gate is a precondition for, from the [VCS capability vocabulary](design.md#the-capability-vocabulary). Omitted ≡ blocks nothing (a pure monitor). |
-| `gates[].schedule` | Monitor cadence: `every <dur>`, `daily`, `weekly`, `after-every-commit`, `manual`. Omitted ≡ never scheduled (a pure precondition). |
+| `gates[].schedule` | Monitor cadence: `every <dur>`, `after-every-commit`, `manual` — a period, an event, and a person, none of them writable as another. There is no `daily` or `weekly`: a named preset for a duration a project can already write is a second spelling of one thing, and one that never says whether the next run is a day after the last or at a fixed hour. Omitted ≡ never scheduled (a pure precondition). |
 | `gates[].serialized_by` | Named exclusions this gate needs, each `<scope>:<leaf>` with scope in `project` / `host` / `arena` / `global`. Declared statically so Reactor can acquire in a canonical order and exclude the wait from the deadline. |
 | `gates[].tags` | Free-form; attached to auto-filed bugs. Also the selector for verify subsets (`verify --tags wasm`). |
 | `gates[].metrics[]` | One spec per metric the gate emits. |
@@ -1610,8 +1610,28 @@ them is BASE's.
 Every gate writes a `GateOutput` JSON object to stdout, with human-readable progress on stderr. The
 envelope is **mandatory** — there is no exit-code-only mode, a deliberate simplification. It
 carries the target (one gate run = one target, invariant), a flat `metrics` map keyed by the names
-declared in the manifest, optional per-file test groups for granular history, and a `complete`
-marker. Reactor consumes the envelope and never parses a gate's human-readable output.
+declared in the manifest, optional per-file test groups for granular history, and — only when the
+run measured less than it normally does — the reason why. Reactor consumes the envelope and never
+parses a gate's human-readable output.
+
+**Completeness is that reason's absence, not a field.** A run carries a reason or it does not, and
+both sides derive the answer from that. A `complete` marker beside the reason would be a second
+copy of one fact, so the wire could say complete and give a reason not to be, leaving a reader to
+choose which half to believe.
+
+**So an incomplete run must say why, and an envelope claiming otherwise is refused.** An empty
+reason is a run that is incomplete with nothing to say — the one state deriving completeness leaves
+no way to mean — and a reader that guessed would have to guess toward *complete*, which is the
+direction that lets a partial run move a baseline. Reactor validates a decoded envelope for this
+and for a target that names nothing, because a gate is free to be written in another language and
+the envelope is the only thing holding it to the contract.
+
+**Every measurement carries the type it was measured in.** A bare `5` is an int and a float alike
+and JSON cannot tell them apart, so a value written bare could not be read back without the
+manifest open beside it, and a float landing on a whole number would arrive as an integer with
+nothing to say otherwise. The manifest still declares the type it expects: the two are a claim and
+its check, so a run reporting a float where the manifest says int is a mismatch to name rather than
+a widening to absorb.
 
 The authoritative schema belongs alongside the gate SDK.
 

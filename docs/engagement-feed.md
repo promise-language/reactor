@@ -983,7 +983,7 @@ array so a gate can post in the stdout it already emits:
 // flow:gate-output-v1 (extended, additive)
 {
   "schema_version": 1,
-  "metrics": { "build_seconds": 50.4 },
+  "metrics": { "build_seconds": { "type": "Float", "value": 50.4 } },
   "articles": [ { /* flow:feed-article-v1; schema_version optional when nested */ } ]
 }
 ```
