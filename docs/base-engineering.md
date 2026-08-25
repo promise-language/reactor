@@ -1498,6 +1498,29 @@ the manifest validator should reject it rather than let it sit inert.
 fallback. OS keys use the same vocabulary as `host_os`. A bare
 string is shorthand for `{ "default": … }`.
 
+**An exec line is exec'd, never interpreted — and this is mandatory rather than a default.** The
+line is split on whitespace: the first token is the program, the rest are its arguments. There is no
+shell, and therefore no globbing, no pipes, no `&&`, no redirection, no substitution, and no quoting
+grammar.
+
+**The reason is portability, and it is not negotiable.** This machinery has to work under PowerShell
+as well as `cmd.exe` and the POSIX shells, and those disagree about quoting, escaping, operators, and
+what a bare word even is. A shell-interpreted line would therefore mean *different things on
+different hosts* — and per-OS dispatch cannot rescue that, because the project would have to know
+not just which OS it was running on but which shell the runner happened to invoke, which is not
+something the manifest can express or the project can predict. Removing the shell removes the
+question: `bin/gate test --wasm` is one program and two arguments everywhere, and the only per-host
+variation left is the one `default`/`windows` already expresses.
+
+It also keeps a boundary the rest of the design depends on. A shell is
+[capability the environment grants](design.md#the-capability-vocabulary), and a gate
+[comes from the tree](#the-principle) — so an implicit shell would hand tree-supplied content a
+reach that is supposed to come only from the arena.
+
+**A gate that genuinely needs shell features writes a script and names the script.** That puts the
+shell dependency in the project's own file, where the project chooses the interpreter explicitly and
+a reader can see it, instead of in a manifest field whose meaning silently depends on the host.
+
 **Metric spec** — `{name, type, direction, mode, cap?}`:
 
 - `type`: `int` / `float` / `bool` (bool persisted as 0/1; direction must be `down` for "has-X"
