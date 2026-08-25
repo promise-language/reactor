@@ -2475,67 +2475,40 @@ of which project caused it.
 
 Reactor does not work around missing platform capability. Where Reactor needs something Promise
 doesn't have yet, it is a **platform request**, listed here with the Reactor milestone it gates.
-Reactor's design assumes these land; it does not design around their absence.
+Reactor's design assumes these land; it does not design around their absence. **A row retires
+when the capability lands** — the tracker and the platform are the authority on state, so a row that
+stays here is one Reactor is still waiting on.
 
 ### Blocking
 
 | # | Capability | Today | Needed for |
 |---|---|---|---|
-| P1 | **TLS — client and server** (PAL-mapped) | absent; `http` is explicitly "HTTP only (no TLS)" | **the whole fleet** — every runner and governor reaches the server over HTTPS — plus outbound GitHub and cloud-provider calls, and every inbound connection |
-| P2 | **DNS resolution** | absent; `net.TcpStream.connect` requires an IPv4 literal | reaching any host by name |
-| P3 | **`crypto` module** | absent; `std.Random` is documented as *not* cryptographically secure | webhook signature verification, session and API tokens, and self-update binary hash verification |
-| P4 | **Concurrent HTTP server** | `http.Server.serve` handles connections **serially** | **long-polling is impossible without it** — one runner's poll would stall the whole server |
+| P1 | **TLS reachable from `http`** | `tls` provides `TlsConfig`, `TlsStream`, `TlsListener`; `http` is **not wired to them** — a redirect to `https://` still raises (T0079) | **the whole fleet** — every runner and governor reaches the server over HTTPS — plus outbound GitHub and cloud-provider calls, and every inbound connection |
+| P3 | **CSPRNG in `crypto`** | `crypto` provides SHA-256 and constant-time comparison; **no CSPRNG** — `std.Random` is xoshiro256** and documents itself as unsuitable | webhook signature verification, session and API tokens, and self-update binary hash verification |
 | P5 | **Atomic file replace + advisory locking + fsync** | `io` has no `rename`, no `flock`, no `sync` | the repo-backed stores' durability model is write-temp-then-rename; the lease ledger has concurrent writers |
-| P6 | **HTTP client essentials** | no redirects, no keep-alive/pooling, no response gzip | GitHub API access at read-index volume, under rate limits |
-| P14 | **Child-process control beyond spawn/kill/wait** | `Process.kill` sends SIGKILL only; no process groups; no way to signal or wait on a pid this process did not spawn | the runner's [watchdog](#nothing-runs-unwatched) — graceful termination, killing a process *tree*, and cleaning up a previous life's children after a restart |
-| P15 | **Argument passing through `promise run`** | passes **no** arguments at all; a trailing token is misread as the source path and `--` is not a separator | every Promise dev tool, and therefore `bin/gate list --json` — the one command BASE requires of a project |
+| P14 | **Child-process control beyond spawn/kill/wait** | unchanged — signal *handling* exists, signal *sending* does not; `kill` is SIGKILL only, no process groups, no way to signal or wait on a pid this process did not spawn | the runner's [watchdog](#nothing-runs-unwatched) — graceful termination, killing a process *tree*, and cleaning up a previous life's children after a restart |
 
-**P15 — tool arguments.** A dev tool that cannot take arguments is not a dev tool, and this sits
-directly under the only contract BASE mandates. It is listed as **blocking** rather than worked
-around, because the available workarounds are both wrong: shipping compiled shims rebuilds the very
-machinery the Promise tooling model exists to delete, and reshaping the contract into something
-argument-free would leak a Promise limitation into a surface that is deliberately language-neutral —
-a Rust project satisfies it with `cargo` and has no argument problem at all. See
-[dev-tooling.md](dev-tooling.md), requirement 3.
+**P1 — TLS reachable from `http`.** The transport itself has landed: `tls` gives a stream and a
+listener over the platform's TLS stack, so the handshake, cipher suites, and trust store come from
+the OS. What Reactor still cannot do is reach it — `http` is not generic over its transport, so an
+`https://` URL raises rather than connecting, and `http.Server` cannot bind TLS by construction.
+That wiring is T0079.
 
-**P1 — TLS**, mapped through the PAL to each platform's TLS stack rather than implemented in
-Promise. Because the handshake, cipher suites, and certificate verification come from the OS, this
-does **not** depend on P3 — the two are independent asks. The shape Reactor needs:
+It is deliberately not automatic. Making `http` grow `https` on its own pulls the platform TLS
+dependency into every consumer of `http`, including ones that will never speak it, and that is a
+size question rather than a plumbing one — **which is itself the open decision**, not a detail of
+the wiring. Reactor needs an answer either way, since every runner and governor reaches the server
+over HTTPS.
 
-- **Client.** A stream type whose read/write surface matches `net.TcpStream` so it satisfies the
-  same `Reader`/`Writer` structural interfaces — that is what lets `http` become generic over its
-  transport and makes `https://` URLs work through the existing request path with no second client.
-  Connect by hostname (P2) with SNI and hostname verification against the platform trust store.
-- **Server.** A listener parallel to `net.TcpListener` that takes a certificate chain and private
-  key and yields the same stream type on `accept`, so `http.Server` binds TLS by construction
-  rather than by wrapping.
-- **Errors.** Certificate and handshake failures surfaced as a distinct failable error, so Reactor
-  can tell "this host is unreachable" from "this host's certificate did not verify" — they demand
-  very different operator responses.
-
-**P2 — DNS.** Resolution by name (`A`/`AAAA`), and `TcpStream.connect` accepting a hostname rather
-than only a literal. TLS hostname verification depends on connecting by name, so P1 and P2 land
-together in practice.
-
-**P3 — crypto.** Independent of P1. Reactor needs SHA-256, HMAC-SHA-256, and constant-time
-comparison — GitHub signs webhooks with `X-Hub-Signature-256`, and verifying that signature is the
-*only* thing standing between the ingress endpoint and forged events — plus a CSPRNG for admin
-session and API tokens, since `std.Random` documents itself as unsuitable for that use.
-
-**P4 — concurrent server.** Today `serve` accepts a connection and handles it inline before
-accepting the next. Reactor serves a UI, a machine API used by every running flow, and event
-ingress from one process; serial handling makes any slow handler a full outage. The ask is a
-per-connection goroutine with keep-alive support and a bounded concurrency limit.
+**P3 — CSPRNG.** Narrowed: SHA-256 and constant-time comparison have landed, which covers verifying
+GitHub's `X-Hub-Signature-256` — the only thing standing between the ingress endpoint and forged
+events. What remains is a cryptographically secure random source for admin session and API tokens.
+`std.Random` is xoshiro256**, and documents itself as unsuitable for exactly this.
 
 **P5 — durable file operations.** `rename` (POSIX `rename(2)` / Windows `MoveFileEx` with
 replace), advisory locking (`flock` / `LockFileEx`), and `fsync`. Every record write in the
 repo-backed `ItemStore` and `LedgerStore` is write-temp → fsync → atomic rename; without it a
 crash mid-write corrupts a record instead of leaving the previous version intact.
-
-**P6 — HTTP client.** Redirect following, connection reuse, and gzip response decoding (the
-`gzip` module exists and needs wiring into the client). GitHub's API is rate-limited and the
-read-index makes many calls; one connection per request with no compression is not viable at that
-volume.
 
 **P14 — child-process control.** `os.Process` already gives spawn with piped stdio, `wait`, `kill`,
 and `id`, and that is enough for the *shape* of the watchdog: a goroutine blocked in `wait` sending
@@ -2569,13 +2542,11 @@ value is knowing nothing — so they are the better ask.
 | P9 | `schema` | design only | manifest and API payload validation; hand-written validators meanwhile |
 | P10 | `--target` cross-compilation | planned (runtime-architecture phase 7e) | collapses the runner/governor/flow release matrix to one build job; a native CI matrix works meanwhile. Matters more for flows, whose matrix multiplies per project |
 | P11 | Tool-source-directory discovery + compile caching | see [dev-tooling.md](dev-tooling.md) | replacing the Go `./make` blueprint with `promise run <tool-dir>` |
-| P12 | Addressing a module in a repo **subdirectory** | **landed in head** — `subdir` on `[require.NAME]`; ships with the next release cut | granular modules out of one BASE repo — wire types, gate SDK, and flow library each addressable on their own |
 | P13 | Partial clone for remote modules | `git clone --bare`, full history, no `--filter` | any remote dependency pulls the entire repo and its history |
 
-**P12 — subdirectory modules: landed in head**
-([promise#30](https://github.com/promise-language/promise/issues/30)), shipping with the next
-release cut — so BASE can be laid out for it now, and nothing pinned to a released channel can
-consume it until that cut happens.
+**P12 — subdirectory modules: shipped** in epoch 2026.8
+([promise#30](https://github.com/promise-language/promise/issues/30)). Retained here for the
+addressing rule rather than as a request: the row is retired, the design it settled is not.
 
 The subpath lives on the **`[require.NAME]` entry** rather than in the location string, and the
 `repo//subdir` spelling other ecosystems use is rejected at parse time — such a URL normalizes to
@@ -2599,7 +2570,10 @@ outside project still depends on partial clone landing.
 
 `os` (process spawn with piped stdio, env, cwd, signals, exec, kill, wait), `io` (files,
 directories, buffered readers/writers, metadata), `json`, `time` (wall clock, monotonic `Instant`,
-`Duration`, sleep), `path`, `net` (TCP listener/stream with reactor-based goroutine parking),
+`Duration`, sleep), `path`, `net` (TCP listener/stream with reactor-based goroutine parking, and
+**resolution by name** — `connect` takes a hostname or a v4/v6 literal and raises a distinct
+`ResolveError`), `http` (**a concurrent server** bounded by `max_connections`, and a client with
+redirect following, connection reuse, and gzip), `crypto` (SHA-256, constant-time comparison),
 `std` (`Mutex`, `Channel`, `Task`, `select`, `` `embed ``, `Builder`, collections), and **string
 interpolation**, which is all the templating a server-rendered fragment needs — the admin UI is a
 WASM client rather than a template engine, so nothing more is required. These cover the

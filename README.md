@@ -126,18 +126,22 @@ Settled enough to build against: the process topology, the gate and flow
 contracts, the authority model down to the capability vocabulary it is expressed
 in, and where each piece lives — the reusable layer is
 [`base`](https://github.com/promise-language/base), one repo publishing several
-independently addressable modules. A build order is unblocked but not yet drawn;
-two things gate its *start* rather than its shape — `promise run` argument
-passing, without which no Promise dev tool can take arguments, and the release cut
-that promotes subdirectory modules out of trunk. Neither touches the design, so
-the contract work runs in parallel and is waiting when they land.
+independently addressable modules. **Both things that gated the start have
+landed** — `promise run` forwards arguments, and epoch 2026.8 shipped
+subdirectory module addressing, so a consumer can pin `base/wire` on its own. The
+first buildable slice needs no server: read a gate manifest, run gates as
+subprocesses, consume their envelopes, ratchet. What is still waited on is
+durable file operations, without which nothing that stores state can be written
+honestly — see [platform requirements](docs/design.md#platform-requirements--requested-of-promise).
 
 Reactor is written in **[Promise](https://github.com/promise-language/promise)**,
 as are the runner, the governor, and the flows — making it the platform's first
 large application as well as its orchestrator. That is a real bet, not a
-formality: Reactor needs TLS, DNS, crypto, and a concurrent HTTP server that
-Promise does not have yet, and those gaps are tracked as platform requests rather
-than worked around. A project's own gates may be written in any language, since
+formality: Reactor asked the platform for TLS, DNS, crypto, a concurrent HTTP
+server, and durable file operations, and those gaps are tracked as platform
+requests rather than worked around. Most have since landed — what remains is
+reaching TLS from `http`, a CSPRNG, sharper child-process control, and atomic
+replace with advisory locking. A project's own gates may be written in any language, since
 that boundary is a JSON contract over a subprocess — so BASE can orchestrate a
 project it shares no runtime with.
 
