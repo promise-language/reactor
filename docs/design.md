@@ -2484,7 +2484,7 @@ stays here is one Reactor is still waiting on.
 | # | Capability | Today | Needed for |
 |---|---|---|---|
 | P1 | **TLS reachable from `http`** | `tls` provides `TlsConfig`, `TlsStream`, `TlsListener`; `http` is **not wired to them** — a redirect to `https://` still raises (T0079) | **the whole fleet** — every runner and governor reaches the server over HTTPS — plus outbound GitHub and cloud-provider calls, and every inbound connection |
-| P3 | **CSPRNG in `crypto`** | `crypto` provides SHA-256 and constant-time comparison; **no CSPRNG** — `std.Random` is xoshiro256** and documents itself as unsuitable | webhook signature verification, session and API tokens, and self-update binary hash verification |
+| P3 | **HMAC-SHA-256 and a CSPRNG in `crypto`** | `crypto` provides SHA-256 and constant-time comparison; **neither HMAC-SHA-256 (T1567) nor a CSPRNG (T1571)** — `std.Random` is xoshiro256** and documents itself as unsuitable | webhook signature verification, session and API tokens, and self-update binary hash verification |
 | P5 | **Atomic file replace + advisory locking + fsync** | `io` has no `rename`, no `flock`, no `sync` | the repo-backed stores' durability model is write-temp-then-rename; the lease ledger has concurrent writers |
 | P14 | **Child-process control beyond spawn/kill/wait** | unchanged — signal *handling* exists, signal *sending* does not; `kill` is SIGKILL only, no process groups, no way to signal or wait on a pid this process did not spawn | the runner's [watchdog](#nothing-runs-unwatched) — graceful termination, killing a process *tree*, and cleaning up a previous life's children after a restart |
 
@@ -2494,21 +2494,54 @@ the OS. What Reactor still cannot do is reach it — `http` is not generic over 
 `https://` URL raises rather than connecting, and `http.Server` cannot bind TLS by construction.
 That wiring is T0079.
 
-It is deliberately not automatic. Making `http` grow `https` on its own pulls the platform TLS
-dependency into every consumer of `http`, including ones that will never speak it, and that is a
-size question rather than a plumbing one — **which is itself the open decision**, not a detail of
-the wiring. Reactor needs an answer either way, since every runner and governor reaches the server
-over HTTPS.
+**The shape is now decided, and Reactor should build to it.** `http` takes a direct dependency on
+`tls`: `https` works through the ordinary client and server, with no separate type and no capability
+check at a call site. The cost is real and was accepted deliberately — every consumer of `http`
+links a TLS backend even if it only ever speaks plaintext, measured at roughly 19 MB from static
+OpenSSL. The alternatives, an injectable transport provider or a separate `https` module, buy that
+back by reintroducing "https is not supported *here*" as action at a distance, which is the failure
+mode the design rules exist to prevent. Provider injection is recorded upstream as the fallback if
+the size ever becomes unacceptable; it is not the direction.
 
-**P3 — CSPRNG.** Narrowed: SHA-256 and constant-time comparison have landed, which covers verifying
-GitHub's `X-Hub-Signature-256` — the only thing standing between the ingress endpoint and forged
-events. What remains is a cryptographically secure random source for admin session and API tokens.
-`std.Random` is xoshiro256**, and documents itself as unsuitable for exactly this.
+Two details differ from T0079's original sketch and Reactor's server should assume them: TLS binding
+is a second factory on the one `Server` — `bind_tls` — rather than a parallel secure type, so the
+accept loop, concurrency bound, shutdown handle and keep-alive framing stay single-sourced; and the
+handshake runs in the per-connection goroutine rather than the accept loop, so one slow client
+cannot stall accepts and a failed handshake costs one connection instead of the listener.
+
+**P3 — HMAC and a CSPRNG.** Narrowed, but less than it first appeared. SHA-256 and constant-time
+comparison have landed, and it is tempting to read that as covering GitHub's `X-Hub-Signature-256` —
+the only thing standing between the ingress endpoint and forged events. It does not: that signature
+is an **HMAC**-SHA-256, and a hash is not a keyed MAC. Verifying it needs T1567, which is open, and
+building it by hand out of the hash that did land is precisely the sort of thing not to hand-roll.
+The other half is a cryptographically secure random source for admin session and API tokens (T1571),
+since `std.Random` is xoshiro256** and documents itself as unsuitable for exactly this.
 
 **P5 — durable file operations.** `rename` (POSIX `rename(2)` / Windows `MoveFileEx` with
 replace), advisory locking (`flock` / `LockFileEx`), and `fsync`. Every record write in the
 repo-backed `ItemStore` and `LedgerStore` is write-temp → fsync → atomic rename; without it a
 crash mid-write corrupts a record instead of leaving the previous version intact.
+
+**The two halves want different things, and conflating them would over-build one and under-build the
+other.** *Durability* is the store's: one writer process, per-record files, and a lock whose only job
+is to refuse a second server rather than to coordinate a queue. *Advisory locking* is the
+[declared exclusions'](base-engineering.md#3-serialization-is-declared-and-waiting-for-it-is-not-work):
+several gate processes on one host contending for `host:cpu`, held for as long as the gate runs,
+which the manifest bounds in tens of minutes. Only the second is genuinely multi-process, and it is
+the one that needs release-on-death and a timed acquire — a lock held across a half-hour gate makes
+"wait forever" a hang rather than an untidiness.
+
+**Release-on-death is a fast path, not the mechanism, and that is by construction.** A lease is
+[held-or-timed](#every-exclusion-is-held-by-a-process-never-by-a-flag): reclamation is the server's job, every holder renews while
+it lives, and a holder that stops renewing loses the lock whether it crashed, was killed, or lost
+its host. So Reactor never needs the OS to drop a lock for correctness — the expiry covers the case
+the OS cannot, including power loss, where no lock discipline gives anything. What the OS dropping
+the lock buys is *speed*: the resource returns in milliseconds instead of at expiry.
+
+This is where P5 and P14 meet, which the separate rows understate. The triple `(host, pid, start
+time)` is what makes "is the holder still alive?" answerable rather than probable, and the start-time
+component is P14's — so P14's process start time is not an independent convenience, it is what the
+lease model verifies against.
 
 **P14 — child-process control.** `os.Process` already gives spawn with piped stdio, `wait`, `kill`,
 and `id`, and that is enough for the *shape* of the watchdog: a goroutine blocked in `wait` sending
