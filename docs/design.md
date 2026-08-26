@@ -2538,10 +2538,22 @@ its host. So Reactor never needs the OS to drop a lock for correctness — the e
 the OS cannot, including power loss, where no lock discipline gives anything. What the OS dropping
 the lock buys is *speed*: the resource returns in milliseconds instead of at expiry.
 
-This is where P5 and P14 meet, which the separate rows understate. The triple `(host, pid, start
-time)` is what makes "is the holder still alive?" answerable rather than probable, and the start-time
-component is P14's — so P14's process start time is not an independent convenience, it is what the
-lease model verifies against.
+**Reactor's lease ledger needs P14's process start time; the file API does not**, and the distinction
+is worth stating because it is easy to collapse into a dependency that does not exist. The triple
+`(host, pid, start time)` is what makes "is the holder still alive?" answerable rather than probable,
+so the start-time component is what Reactor verifies a holder against — that is a coupling in
+Reactor. The file layer decides the same question a different way: reclaiming an orphaned temp file
+is settled by acquiring its lock rather than by probing whether anyone is alive, so taking the lock
+*is* the proof the previous owner is gone. Sequencing the two together would make P5 look blocked on
+P14 when it is not.
+
+**The file-locking design is settled upstream and Reactor should build to it, not restate it.** Two
+things Reactor asked for are in: a **timed acquire**, on the argument that an unbounded wait against
+a half-hour gate is indistinguishable from a hang, and **network filesystems declared out of scope**
+rather than left unstated. Locks are `flock(2)` on Linux and macOS and `LockFileEx` on Windows —
+advisory on the first, mandatory on the second — with macOS flushing through `F_FULLFSYNC` rather
+than `fsync(2)`. Reactor's remaining obligation is to hold the two uses apart, since the store's lock
+and an exclusion's lock want opposite things.
 
 **P14 — child-process control.** `os.Process` already gives spawn with piped stdio, `wait`, `kill`,
 and `id`, and that is enough for the *shape* of the watchdog: a goroutine blocked in `wait` sending
