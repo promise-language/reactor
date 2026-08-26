@@ -2567,12 +2567,32 @@ one watcher per child cheap. Four things are missing, each of which the
 - **Process groups / job objects.** A spawn option to put the child in its own group, and a kill
   addressed to the group, so a flow's agent and that agent's compiler die with it. Without this,
   killing on deadline leaves grandchildren running and the arena accumulates orphans.
-- **Signalling and reaping a pid this process did not spawn** (POSIX `kill(pid, 0)` for liveness and
+- **Signalling and probing a pid this process did not spawn** (POSIX `kill(pid, 0)` for liveness and
   a signal by number). After a runner crash the recorded pids belong to a dead parent; today there
-  is no handle to reach them, so the restart cleanup has nothing to call.
+  is no handle to reach them, so the restart cleanup has nothing to call. **Not reaping them** — this
+  said "reaping" and that was wrong. `waitpid(2)` on a non-child fails with `ECHILD` because an exit
+  status lives in the parent-child relationship, so no API shape provides it; and a restarted runner
+  never needs it, since its predecessor's children are reparented to init, which reaps them. What the
+  restart needs is "is this still the process I recorded, and if so, stop it" — a probe and a signal.
 - **Process start time for a pid**, which is what makes `(host, pid, start time)` — the identity
   every [lease](#every-exclusion-is-held-by-a-process-never-by-a-flag) is keyed on — checkable
   rather than assumed.
+
+**The shape is settled upstream and Reactor builds to it.** Two types split by *provenance* rather
+than by freshness: a `ProcessRef`, obtained by attaching to a pid, carrying identity, start time,
+liveness and `signal`; and a `Process` that extends it, obtained by spawning, adding the pipes,
+`wait`, and a group kill. Reactor asked for a single handle keyed on a start-time check and that was
+refused, correctly: whether we *started* a process or merely *observed* one is a permanent difference
+in what we may do with it, and expressing it as a runtime comparison would have made a static
+distinction dynamic. The start time survives as a getter, which is all the lease key needed of it.
+
+It also reads better across the failure Reactor actually has. A runner that crashes and restarts is
+no longer anyone's parent, so it can construct only a `ProcessRef` — the type degrades honestly and
+the compiler steers the cleanup path away from `wait` and the pipes, which is the same answer the
+kernel would give at runtime through `ECHILD`. Attaching is failable rather than optional-returning,
+so "no such process" stays distinguishable from "exists, not permitted"; collapsing them would tell
+a supervisor its target is gone when it is merely unreachable, which is the one wrong answer that
+matters while reclaiming a lease.
 
 The first two are unconditional. The last two could be avoided by having the governor own child
 cleanup instead of the runner, but that pushes item-shaped knowledge into a component whose entire
