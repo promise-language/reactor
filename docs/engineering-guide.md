@@ -1,13 +1,16 @@
 # Engineering guide
 
 > **This document defines how Promise code under BASE is written** — naming, shape, testing,
-> visibility, and what to do when the platform is in the way. It governs the modules published here,
-> and it is **the source every other BASE repository vendors from**; a project's own gates may be
-> written in anything and are governed by their own project.
+> visibility, and what to do when the platform is in the way. It governs Reactor, the runner, the
+> governor, and the wire modules; a project's own gates may be written in anything and are governed
+> by their own project.
 >
-> **It assumes** Promise's own
+> **This is a vendored copy. The source is
+> [`base`](https://github.com/promise-language/base/blob/main/docs/engineering-guide.md)**, which is
+> right when the two disagree about a shared rule, and which in turn derives the language-level half
+> from Promise's own
 > [`docs/code-style.md`](https://github.com/promise-language/promise/blob/main/docs/code-style.md)
-> and `CLAUDE.md`, from which the language-level half is derived.
+> and `CLAUDE.md`.
 >
 > **Enforcement is stated per rule and is mostly not built yet.** A rule with no check behind it is
 > marked *advisory*, deliberately — see [Enforcement](#enforcement).
@@ -19,7 +22,7 @@ rule that lives in another repo is not in the agent's context at the moment it h
 so referencing it is the same as not having it.
 
 That is the argument the corpus already makes for gates — [a gate measures the tree, so it comes
-from the tree](https://github.com/promise-language/reactor/blob/main/docs/base-engineering.md#the-principle) — with the same shape applied to guidance: it is
+from the tree](base-engineering.md#the-principle) — with the same shape applied to guidance: it is
 read in the tree, so it lives in the tree.
 
 **So the language-level half is vendored, not linked**, which the design permits explicitly: bytes
@@ -28,9 +31,10 @@ in the tree are the project's whatever their origin. Two honest consequences:
 - **It is derived, not byte-copied.** Promise's text is written for a compiler — it references
   `modules/std/*.pr`, codegen tests, IR. What is general is carried over; what is specific is
   restated. So nothing can diff this against it, and reconciling the two is a periodic human act.
-- **Every BASE repository holds a copy, and this one is the source.** A repository that vendors
-  this guide names it as the origin and adds only what is true of itself. When two copies disagree,
-  this is the one that is right — which is the only thing keeping several copies from becoming
+- **The source is `base`, not this file.** Every repository in the organization holding Promise
+  code needs the same guide, so it lives in the BASE layer and each repository vendors it, naming
+  the origin and adding only what is true of itself. When this copy and `base` disagree about a
+  shared rule, `base` is right — which is the only thing keeping several copies from becoming
   several opinions.
 
 ## Naming
@@ -90,7 +94,7 @@ in the tree are the project's whatever their origin. Two honest consequences:
   narrowed and needs no `!`; a field is not, and still does. Narrowing does not cross `&&` or reach
   the statement after the `if`, so nest the checks.
 - **Identities are types, never bare `string` or `int`.** The
-  [identity model](https://github.com/promise-language/reactor/blob/main/docs/design.md#identity) names eighteen distinct things, and the ones crossing
+  [identity model](design.md#identity) names eighteen distinct things, and the ones crossing
   an owner boundary are published here. A function taking three `string`s takes them in an order
   nothing checks, and an item id assigned to a project id is a bug the compiler should have caught.
   Identity types are value types, immutable, all fields `` `final ``.
@@ -118,14 +122,14 @@ in the tree are the project's whatever their origin. Two honest consequences:
 - **Default to no comments.** Names carry meaning. Comment the *why* when it is non-obvious — a
   hidden constraint, a subtle invariant, a workaround and the issue it waits on.
 - **Documentation is part of the change, not after it.** A change that makes a document wrong is
-  incomplete, and the [design corpus](https://github.com/promise-language/reactor/blob/main/tree/main/docs) is load-bearing rather than descriptive: its
+  incomplete, and the [design corpus](.) is load-bearing rather than descriptive: its
   cross-references are claims meant to be checked.
 
 > **No `TODO` comments. Fix it now, or file it and reference the issue.**
 
 A `TODO` is a backlog entry filed somewhere with no backlog semantics: nothing lists them, nothing
 ranks them, nothing closes them, and **nobody ever sweeps them**. It is the same
-[mirrored-knowledge failure](https://github.com/promise-language/reactor/blob/main/docs/base-engineering.md#no-manual-gate-registration) the gate contract
+[mirrored-knowledge failure](base-engineering.md#no-manual-gate-registration) the gate contract
 exists to prevent — a second copy of "work that is not done", kept where the first copy cannot see
 it.
 
@@ -156,7 +160,7 @@ the tracker; what is built is in the code and its own documentation. *"See the o
 complete and permanently correct, where a checklist is correct for a week.
 
 The corpus holds itself to this: progress lives in [the README's Status
-section](https://github.com/promise-language/reactor/blob/main/README.md#status) alone, which is why nothing here carries a milestone section or a
+section](../README.md#status) alone, which is why nothing here carries a milestone section or a
 per-section status banner. **A list of requests against another project is a record too** — it names
 its upstream issues rather than describing their current state, so the tracker stays the authority
 and a row retires when its issue closes.
@@ -227,7 +231,7 @@ a platform request, not a local problem.
   variations; the variations are where the two copies start disagreeing. Always reach for the
   simplest single implementation.
 - **Wire types are one shared module used by both
-  sides** ([why](https://github.com/promise-language/reactor/blob/main/docs/design.md#seams-are-process-boundaries--by-design-not-by-accident)) — not
+  sides** ([why](design.md#seams-are-process-boundaries--by-design-not-by-accident)) — not
   hand-kept-in-sync copies, which is the entire reason that module exists.
 - **The exception is deliberate vendoring**, as with this document — marked where it happens, with
   its source named.
@@ -256,13 +260,13 @@ a change touches** — not only in the lines it adds:
 **Anything found here is filed at critical priority**, whether or not the current change caused it.
 These are the classes that survive review, pass tests, and surface in production as something
 unrelated — which for a system built to [run unattended for prolonged
-periods](https://github.com/promise-language/reactor/blob/main/docs/design.md#objectives) is the failure mode that matters most.
+periods](design.md#objectives) is the failure mode that matters most.
 
 ## Visibility
 
 - **Nothing is `` `public `` that does not have to be.** Module-only, or narrower, by default.
 - Public is a commitment: it is what other modules compile against and what
-  [wire compatibility](https://github.com/promise-language/reactor/blob/main/docs/design.md#a-shared-module-is-not-a-shared-version) constrains. Reaching for
+  [wire compatibility](design.md#a-shared-module-is-not-a-shared-version) constrains. Reaching for
   it early is how a private detail becomes a permanent one.
 
 ## Testing
@@ -293,7 +297,7 @@ periods](https://github.com/promise-language/reactor/blob/main/docs/design.md#ob
   rather than merely large.
 - **Every wire contract has a conformance suite**, and every implementation of a store passes the
   same one — [the reason the persistence split is stated as an
-  interface](https://github.com/promise-language/reactor/blob/main/docs/design.md#persistence) at all.
+  interface](design.md#persistence) at all.
 
 ## No hidden effects
 
@@ -316,7 +320,7 @@ its artifact is, what it must not do.
 
 **And most of what a prompt would otherwise repeat should be a grant instead.** Instructions like
 *do not commit*, *do not push* are prompt-shaped requests for what
-[role ∩ step](https://github.com/promise-language/reactor/blob/main/docs/design.md#authority-roles-steps-and-capabilities) makes mechanical — the design's own
+[role ∩ step](design.md#authority-roles-steps-and-capabilities) makes mechanical — the design's own
 point is that this turns "this step should only do X" from an instruction an agent may ignore into a
 boundary it cannot cross. A rule that could be a bound and is written as a sentence is a rule that
 will eventually be ignored exactly once.
@@ -324,7 +328,7 @@ will eventually be ignored exactly once.
 ## Enforcement
 
 The corpus's own rule is that [a grant with no choke point behind it is advisory and should be
-labelled as such](https://github.com/promise-language/reactor/blob/main/docs/design.md#where-it-is-enforced). The same honesty applies here: most of this is
+labelled as such](design.md#where-it-is-enforced). The same honesty applies here: most of this is
 not yet checked by anything.
 
 | Rule | Enforcement | Status |
@@ -343,10 +347,10 @@ not yet checked by anything.
 | Documentation currency beyond links | review | advisory |
 
 **None of it can be built yet.** A gate is a program that takes arguments, and `promise run` passes
-none — the [platform request](https://github.com/promise-language/reactor/blob/main/docs/design.md#platform-requirements--requested-of-promise)
+none — the [platform request](design.md#platform-requirements--requested-of-promise)
 that blocks every Promise dev tool, and therefore `bin/gate list --json`, the one command BASE asks
 of a project. Writing these as Go tools instead would rebuild the machinery the
-[Promise tooling model](https://github.com/promise-language/reactor/blob/main/docs/dev-tooling.md)
+[Promise tooling model](dev-tooling.md)
 exists to delete.
 
 So the rules stand as review obligations until that lands, and **the table is the roadmap**: each
