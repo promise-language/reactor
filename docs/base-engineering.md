@@ -1076,7 +1076,7 @@ questions.
 | | Meaning |
 |---|---|
 | `advanced` | I produced my artifact; re-enter the scan |
-| `blocked` | rerun when *&lt;condition&gt;* — the same [edge vocabulary](design.md#an-edge-names-a-target-and-a-condition-never-a-version) used across projects, plus "a human answered" |
+| `blocked` | rerun when *&lt;condition&gt;* — the same [edge vocabulary](design.md#an-edge-names-a-target-and-a-condition-never-a-version) used across projects, plus "a human answered" and "[the execution I asked for finished](design.md#an-execution-outlives-the-process-that-asked-for-it)" |
 
 A `run` that produces neither an artifact nor a block is **not an outcome**. The step is simply not
 done, and [invariant 6](#6-a-steps-completion-is-a-verified-artifact) returns it to resolution with
@@ -1190,8 +1190,8 @@ endpoint itself.
 | **Work** | `artifact.submit` | own step only; Reactor verifies before recording completion |
 | | `checkpoint.write` | own step only |
 | | `hold.place:<kind>` | `blocked`, `waiting`, or `parked` |
-| **Agent** | `agent.run` | one prompt, one completed run; the runner mounts tools, holds credentials, and meters |
-| **Gates** | `gate.run` · `gate.results.read` | the runner executes; the flow asks |
+| **Agent** | `agent.run` | one prompt, one completed run; the runner mounts tools, holds credentials, and meters — an [execution](design.md#an-execution-outlives-the-process-that-asked-for-it), so the flow may wait or block on it |
+| **Gates** | `gate.run` · `gate.results.read` | the runner executes; the flow asks. Also an execution — `gate.results.read` is how a wait polls, and how a later `check` reuses a result [still valid for the tree](design.md#an-execution-outlives-the-process-that-asked-for-it) |
 | | `baseline.update` | mechanical — verifies the ratchets and writes the new values; the [baseline file is a denied path](design.md#the-capability-vocabulary), so this is the only way it changes |
 | **VCS** | `vcs.push:branch:own` · `vcs.pr.create` | proxied — a grant over what the runner does on the flow's behalf, not permission to open a connection |
 | **Engagement** | `article.post` · `article.resolve:own` | [feed articles](engagement-feed.md#the-article) |
@@ -1208,6 +1208,24 @@ Two places where splitting would make a stated rule enforceable by convention on
   checkpoint exists to prevent.
 - **Asking a question is one operation**, the annotation and the `waiting` hold together. Half of it
   is either a question nobody is waiting on or an item waiting on a question that does not exist.
+
+### A flow may finish while work it asked for is still running
+
+`agent.run` and `gate.run` do not run anything inside the flow. They ask the runner to start an
+**execution**, which is [the runner's child rather than the
+flow's](design.md#an-execution-outlives-the-process-that-asked-for-it) and may outlive the `run`
+that requested it. The rule is stated there; what it obliges of a flow is two lines:
+
+- **A flow may wait, in bounded polls, or report `blocked` on the execution and return.** Neither is
+  the failure path. Waiting spends the step's work deadline on the execution's work; blocking spends
+  nothing, and the step is re-dispatched when the execution terminates, with the result among the
+  [artifacts its context is assembled from](#context-is-assembled-never-accumulated). A flow that
+  cannot bound the work — a full gate set, a long build, an agent given real latitude — should
+  block, and a step whose work deadline could not cover the execution **must**.
+- **A flow never starts long-lived work itself.** A subprocess it runs to do its own job is
+  ordinary and unaffected; a subprocess meant to *keep running after `run` returns* is the one shape
+  ruled out, because it is a child of a process that is about to exit and dies with it however it is
+  monitored. There is no operation here that detaches one, which is the point.
 
 ### What a flow may not do
 

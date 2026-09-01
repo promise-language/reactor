@@ -520,7 +520,7 @@ them all; an item carries a *set* of holds and proceeds when it holds none.
 
 | Kind | Says about the work | Cleared by | A fleet with forty |
 |---|---|---|---|
-| `blocked` | nothing is wrong; it is queued behind something | the dependency [landing or publishing](#an-edge-names-a-target-and-a-condition-never-a-version) | may be perfectly healthy — deep dependency chains look like this |
+| `blocked` | nothing is wrong; it is queued behind something | the dependency [landing or publishing](#an-edge-names-a-target-and-a-condition-never-a-version), or [an execution finishing](#an-execution-outlives-the-process-that-asked-for-it) | may be perfectly healthy — deep dependency chains look like this |
 | `waiting` | nothing is wrong; a person is an input | an answer arriving, or [the window defaulting](engagement-feed.md#questions-with-deadlines) | means the human is the bottleneck |
 | `parked` | **something is wrong** | a human diagnosing it | is a sick fleet |
 | `manual` | a person took it over — *"I'll handle this"* | that person releasing it | is a fleet doing by hand what it cannot yet do itself |
@@ -592,6 +592,13 @@ wrong repo must not read later as one that was refused, which is why `moved` exi
 `contended` belongs to neither: it is a step that exceeded its **queue** deadline without starting,
 returned to the queue as a [capacity signal rather than a
 defect](#exclusions-are-declared-and-waiting-for-one-is-not-work). It says nothing about the item.
+
+**Execution** — one run of requested work: a gate run, a preflight, an agent invocation, a build.
+`queued` · `running` · `done` · `failed` · `timed out` · `cancelled`, with `contended` here too, and
+here too a recorded return to the queue rather than a state it rests in. Its lifetime is its own: it
+neither begins nor ends with [the step run that asked for
+it](#an-execution-outlives-the-process-that-asked-for-it), which is the point of it being a separate
+lifetime rather than a field on the step run.
 
 **Question** — `open` · `answered` (a principal answered) · `defaulted` (the window elapsed and the
 system answered) · `withdrawn` (the asker retracted). `answered` and `defaulted` produce an
@@ -1327,6 +1334,13 @@ what it learned in its [checkpoint](base-engineering.md#a-step-may-carry-work-fo
 and the tree; each invocation is independently bounded, metered, killable, and resumable. The agent
 is still multi-turn *inside* an invocation — that is the harness's business, and none of the flow's.
 
+**One completed run does not mean the step is still there when it completes.** An invocation is an
+[execution](#an-execution-outlives-the-process-that-asked-for-it) like a gate run: the runner owns
+it, so the step may wait for it or block on it and finish. Being one-shot is what makes that safe —
+there is no conversation to keep alive across the gap, only a durable result to be re-dispatched
+with. It also bounds what the runner may mount: a tool whose only meaning is a *later* invocation
+promises a wakeup a one-shot process cannot deliver, so it is not offered.
+
 ### What the runner owns, and what the flow owns
 
 The split is a placement rule of the same kind as [gates from the tree, flows from outside
@@ -1901,6 +1915,140 @@ host, and conflating them turns a survivable interruption into a write-off.
 the accepted floor and the reason commits still matter, but it is a different event from a resume —
 one starts with the partial tree and the agent's notes, the other with neither — and the ledger must
 distinguish them, because only the second is a repeat.
+
+### An execution outlives the process that asked for it
+
+[Nothing runs unwatched](#nothing-runs-unwatched) settles who *watches* everything the runner
+starts. It does not settle who *asked* — and that omission is where an unattended fleet burns money.
+Work that takes longer than the invocation needing it has nowhere to go, so it gets started as a
+child of that invocation, which then ends and takes the work down with it while reporting that it is
+waiting for a result. Asked again, the same invocation starts the work again, observes that it is
+running, and ends again. Every cycle is paid for in full and none of them converges. It is a
+[spin](#reliability--never-stall-never-spin) that looks like patience, which is the expensive kind,
+because every attempt arrives with a plausible explanation attached.
+
+> **Everything the runner performs on request — a gate run, a preflight, an agent invocation, a
+> build — is an *execution*: a child of the runner, never of the requester. The requester may wait
+> for it, or finish while it is still running. Both are correct.**
+
+The last sentence is the load-bearing one. A design where only one of the two works forces the
+requester to predict how long the work will take, and it will predict wrong — expensively, because
+being wrong means destroying work that was nearly paid for. *Execution* is the record's name because
+[*run* is already spoken for](base-engineering.md#step-resolution--steps-dispatch-themselves) by the
+flow's `run <step>` entry point. The roles are not exclusive — a step run is a child of the runner
+too, and a step that blocks on an execution is itself something the item waits on — but a requester
+and the execution it asked for are always two processes, never one.
+
+- **An execution is the runner's child and the requester's sibling.** [Kill the tree, not the
+  child](#nothing-runs-unwatched) takes the requester's whole process group down on the requester's
+  deadline, so an execution started inside that group would be bounded by a clock measuring
+  something else — and a gate run killed mid-flight leaves
+  [nothing behind](#an-arena-is-in-exactly-one-of-four-states). What buys independence is the
+  parentage, not the supervision: two clocks are independent because neither process is inside the
+  other. The [orphan rule](#nothing-runs-unwatched) is untouched and stays meaningful — a surviving
+  grandchild is still a reported fault, because the legitimate way to leave work running is to have
+  never parented it to the requester at all.
+- **It is registered before it starts and queryable until it is terminal**, like every other child,
+  carrying two things the [step-run record](#the-states-and-what-they-belong-to) has no need of: the
+  tree it runs against, and the moment it *started* as distinct from the moment it was requested.
+  **Its occupancy always has a holder**, per [the arena
+  states](#an-arena-is-in-exactly-one-of-four-states): an execution dispatched to a fresh arena takes
+  a transient lease of its own, and one that runs inside an item's resolution runs on that item's
+  arena under the sticky lease already there. What it may never be is the third thing — running on a
+  machine the scheduler reads as free.
+- **Its result is durable and readable after the fact.** A result that exists only in a stream the
+  requester may have stopped reading is not a result; it is a byproduct of somebody having watched.
+  The record is what every later reader consults — the resumed requester, a later step's `check`, an
+  operator asking what happened.
+- **Waiting is charged the execution's work and never its queue.**
+  [Invariant 3](base-engineering.md#3-serialization-is-declared-and-waiting-for-it-is-not-work)
+  splits a step's own clocks that way, and a request propagates the split rather than defeating it:
+  a requester that waits spends its work deadline on work it asked for, which is honest, and is not
+  charged for the fleet being busy, which would make its timeout a function of load one indirection
+  away from the contention that caused it. Each poll returns within its own bound, so waiting is
+  many bounded calls and never one long one.
+- **A requester may instead block on the execution and finish, and that is not a failure.** It
+  reports [`blocked`](base-engineering.md#step-resolution--steps-dispatch-themselves) naming the
+  execution as the condition and carrying its
+  [checkpoint](base-engineering.md#a-step-may-carry-work-forward-without-claiming-completion) — one
+  operation, by [the rule about halves](base-engineering.md#an-operation-whose-halves-must-both-happen-is-one-call).
+  The resulting hold is ordinary in every respect: an execution carries a queue deadline and a work
+  deadline and therefore terminates, so its condition is evaluable and the hold is not the
+  [pause that never clears](#paused-is-derived-the-holds-are-what-exist) holds are refused for.
+  **The arena binding follows where the execution runs**, which the
+  [ordinary blocking rule](#blocked-is-a-recorded-state-not-a-stall) already implies rather than
+  amends: it is released when the execution went elsewhere — a gate is built on a fresh worktree
+  from the commit under test, so nothing is being protected — and kept while an execution is running
+  on the item's own arena, because that arena is not idle capacity somebody else should be offered.
+  It is running the thing the item is waiting for.
+- **Completion continues the work that requested it.** Reaching a terminal state clears the hold,
+  the item is dispatched again, the resolver re-scans, and the step sees the outcome it was waiting
+  for because a durable result is exactly what
+  [assembled context](base-engineering.md#context-is-assembled-never-accumulated) is assembled from.
+  Nothing is lost by having stopped. This is also why the failure this section opens with cannot
+  recur: what re-dispatches the work is the execution *terminating*, never a poll that finds it
+  still running, so there is no cycle in which a requester wakes, learns nothing, and pays for it.
+- **Requesting an execution is progress; requesting the same one twice is not.** A block whose
+  [checkpoint stood still](#every-attempt-must-make-progress) is the loop case, and *I asked for
+  this gate run* advances it exactly once — the durable execution record did not exist before and
+  does now. Asking again for the same work on the same tree is the spin that rule forbids, so it
+  starts nothing: a request matching an execution already in flight, or already completed and still
+  valid below, **joins** it. Identity is what it runs, the tree it runs against, and where — the
+  third because a result on `linux/amd64` says nothing about `darwin/arm64`, so those are two
+  executions and not one.
+
+**A result is valid for exactly one tree.** Reuse is the entire reason to keep results, and reuse
+needs a rule sharper than *recent enough*:
+
+> **A completed execution carries a content hash of everything that would be committed, captured
+> when it started. A consumer trusts the result when the current tree hashes equal, and runs its own
+> otherwise.**
+
+Nothing else confers trust — not recency, not the same item, not the same arena, not the same agent.
+Each of those is a reason to *believe* the result still holds, and a belief is what this corpus
+refuses everywhere else it has refused a flag.
+
+**The tree, not the commit.** [`implement` amends its commit on every
+run](base-engineering.md#2-a-step-changes-the-tree-only-by-committing-and-leaves-it-clean), so a
+commit sha changes when nothing about the content did; a result keyed to it would be discarded for
+no reason, which teaches the fleet that gates are cheap to re-run. Hashing content also means
+committing does not invalidate anything, so a result taken before a commit is evidence about the
+commit that follows it.
+
+**Invariant 2 is what makes this cheap.** The tree is clean at gate granularity, so what an
+execution measures is always reachable from a commit rather than only from the arena that produced
+it. Two things follow. An execution whose subject is a tree — every gate, preflight and build — can
+be dispatched to any suitable arena and pins nobody's binding, which is what makes
+blocking-and-finishing free there rather than a trade against capacity. And *the gate passed on a
+tree that then committed something else* — an untracked file
+that never enters the commit is the usual way — is not a case that must be caught, because the
+clean-tree check has already made it impossible to create.
+
+**What is not an execution.** A process a flow or an agent starts in the ordinary course of its own
+work — a compiler, a test binary, a script — is not an execution and needs nothing from this
+section: it lives inside the requester's group, is bounded by the requester's deadline, and is done
+before the requester answers. That is the common case and it is unchanged.
+
+What is ruled out is the shape in between: work started as a child of the requester and *intended*
+to outlive it. It cannot, whatever it is called — a background shell, a detached job, a monitored
+task. It is parented to a process that is about to exit, and no amount of polling, monitoring, or
+notification changes what happens when that process exits. A surviving grandchild is still an
+[orphan and a reported fault](#nothing-runs-unwatched); one that dies with its parent is worse,
+because the requester has already reported that it is waiting for it.
+
+Two consequences fall on the runner, which is the only party positioned to enforce them:
+
+- **The runner mounts no tool whose only meaning is a later invocation.** An agent invocation is
+  [one-shot](#the-runner-runs-the-agent-not-the-flow): it ends when the agent answers and nothing
+  re-enters it, so a tool promising a wakeup *after* the answer promises something the process
+  cannot deliver — and an agent offered one will reasonably use it and then stop, having been told
+  it would be woken. The mounted set is already bounded by
+  [the step's grant](#the-capability-vocabulary); this is the second constraint on it, and it is
+  about capability of the harness rather than authority of the step.
+- **An answer given while work the invocation started is still running is a failure**, reported
+  naming what was still alive, rather than a success with an asterisk. Either the agent asks for an
+  execution or it finishes its own work; there is deliberately no third arrangement, because a
+  second mechanism that looks like this one is how the work gets lost.
 
 ### Infrastructure failures and process failures are different things
 
@@ -2677,6 +2825,14 @@ a proposal awaiting approval.
 - **Everything the runner starts is a separate process with a pid, and nothing runs unwatched.** No
   unbounded waits, liveness read from the OS rather than from output, kill the process group rather
   than the child, and a restart adopts nothing.
+- **An execution belongs to the runner, never to the process that asked for it.** A gate run, a
+  preflight, an agent invocation — the requester may wait for it in bounded polls, or block on it
+  and finish, and **both are correct**, because a requester forced to guess which one works will
+  guess wrong. The result is durable and valid for **exactly one tree**: a consumer trusts a
+  completed execution when the content hash still matches and runs its own otherwise. Completion
+  clears the hold and the work continues from the result. The single ruled-out shape is work started
+  as a child of the requester and meant to outlive it — it dies with the parent whatever it is
+  called, so the runner mounts no tool that promises a wakeup after the answer.
 - **Locks are leases held by `(host, pid, start time)`, never flags.** An integration lock, a
   per-host verify lock, a worktree, an item claim — all the same primitive, all released
   automatically when the holding process dies. More generally, every piece of persisted global state
