@@ -1,5 +1,8 @@
 # Reactor — Architecture
 
+> **Tag:** `design` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 > **This document defines what Reactor is** — the implementation language, the process seams, the
 > authority model, the deployment topology, the persistence split, the reliability rules, and how
 > steps and gates are executed. Reactor is written in **Promise**.

@@ -1,5 +1,8 @@
 # Promise-based dev tooling
 
+> **Tag:** `dev-tooling` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 > **This document defines how project dev tooling is built and run** once the tools are written in
 > Promise instead of Go — and why most of the machinery a Go blueprint needs stops being necessary.
 > It is scaffolding rather than architecture: it exists because the Go toolchain forced a

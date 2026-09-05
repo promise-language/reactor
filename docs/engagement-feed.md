@@ -1,5 +1,8 @@
 # The engagement feed
 
+> **Tag:** `engagement-feed` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 > **This document defines how the system spends human attention** — the article, ranking by regret
 > per minute, questions and their deadlines, and what a reader is permitted to do from a card.
 >
