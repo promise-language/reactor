@@ -1,5 +1,8 @@
 # BASE Engineering — the project-facing layer
 
+> **Tag:** `base-engineering` — remaining work to complete this document: the query named in
+> [`docs/index.md`](index.md).
+
 > **This document defines what a project adopting BASE must provide, and what BASE provides to it**
 > — the six invariants, the gate contract, step resolution, and what lives in which repo. Some of it
 > is owned and built by the project (gates); some is project-specific but deliberately versioned
